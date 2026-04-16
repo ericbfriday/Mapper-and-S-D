@@ -1,0 +1,716 @@
+--[[
+    Search and Destroy - Utility Functions
+    Mudlet Port
+    
+    Original MUSHclient plugin by Crowley
+    Ported to Mudlet
+    
+    This module contains utility functions for:
+    - Aardwolf color code conversion
+    - String manipulation
+    - SQL helpers
+    - Time formatting
+    - Level calculations
+]]
+
+snd = snd or {}
+snd.utils = snd.utils or {}
+
+-------------------------------------------------------------------------------
+-- Aardwolf Color Code Conversion
+-------------------------------------------------------------------------------
+
+-- Aardwolf uses @ codes: @R = bold red, @g = green, @x123 = xterm color
+-- Mudlet uses cecho format: <red>, <green>, or decho/hecho
+
+-- Map Aardwolf color codes to Mudlet cecho color names
+snd.utils.aardColorMap = {
+    -- Normal colors (lowercase)
+    ["k"] = "<black>",
+    ["r"] = "<maroon>",
+    ["g"] = "<green>",
+    ["y"] = "<ansi_yellow>",
+    ["b"] = "<navy>",
+    ["m"] = "<purple>",
+    ["c"] = "<turquoise>",
+    ["w"] = "<light_gray>",
+    -- Bold colors (uppercase)
+    ["D"] = "<gray>",
+    ["R"] = "<red>",
+    ["G"] = "<ansi_light_green>",
+    ["Y"] = "<yellow>",
+    ["B"] = "<blue>",
+    ["M"] = "<magenta>",
+    ["C"] = "<cyan>",
+    ["W"] = "<white>",
+}
+
+-- Convert xterm 256 color number to hex for Mudlet
+-- This is a simplified version - full xterm palette
+snd.utils.xtermToHex = {}
+
+-- Initialize xterm color table (standard 256 color palette)
+local function initXtermColors()
+    -- Colors 0-15: Standard colors (handled by aardColorMap mostly)
+    local basic16 = {
+        "000000", "800000", "008000", "808000", "000080", "800080", "008080", "c0c0c0",
+        "808080", "ff0000", "00ff00", "ffff00", "0000ff", "ff00ff", "00ffff", "ffffff"
+    }
+    for i = 0, 15 do
+        snd.utils.xtermToHex[i] = basic16[i + 1]
+    end
+    
+    -- Colors 16-231: 6x6x6 color cube
+    local levels = {0, 95, 135, 175, 215, 255}
+    local i = 16
+    for r = 1, 6 do
+        for g = 1, 6 do
+            for b = 1, 6 do
+                snd.utils.xtermToHex[i] = string.format("%02x%02x%02x", 
+                    levels[r], levels[g], levels[b])
+                i = i + 1
+            end
+        end
+    end
+    
+    -- Colors 232-255: Grayscale
+    for i = 232, 255 do
+        local gray = 8 + (i - 232) * 10
+        snd.utils.xtermToHex[i] = string.format("%02x%02x%02x", gray, gray, gray)
+    end
+end
+
+initXtermColors()
+
+--- Convert Aardwolf @-color codes to Mudlet cecho format
+-- @param str String with Aardwolf color codes
+-- @return String with Mudlet cecho color codes
+function snd.utils.aardColorsToMudlet(str)
+    if not str or str == "" then return "" end
+    
+    -- Handle @@ (literal @)
+    str = str:gsub("@@", "\001") -- temporary placeholder
+    
+    -- Handle xterm colors @x000-@x255
+    str = str:gsub("@x(%d%d?%d?)", function(num)
+        local n = tonumber(num)
+        if n and n >= 0 and n <= 255 then
+            local hex = snd.utils.xtermToHex[n]
+            if hex then
+                return "<#" .. hex .. ">"
+            end
+        end
+        return ""
+    end)
+    
+    -- Handle standard color codes
+    str = str:gsub("@([krgybmcwDRGYBMCW])", function(code)
+        return snd.utils.aardColorMap[code] or ""
+    end)
+    
+    -- Handle @- (tilde, historical)
+    str = str:gsub("@%-", "~")
+    
+    -- Remove any remaining invalid @ codes
+    str = str:gsub("@[^@]", "")
+    
+    -- Restore literal @
+    str = str:gsub("\001", "@")
+    
+    return str
+end
+
+--- Strip all Aardwolf color codes from a string
+-- @param str String with color codes
+-- @return Plain string without color codes
+function snd.utils.stripColors(str)
+    if not str then return "" end
+    
+    str = str:gsub("@@", "\001")
+    str = str:gsub("@%-", "~")
+    str = str:gsub("@x%d?%d?%d?", "")
+    str = str:gsub("@.", "")
+    str = str:gsub("\001", "@")
+    
+    return str
+end
+
+--- Escape a string for use in regex patterns
+-- @param str String to escape
+-- @return Escaped string safe for regex
+function snd.utils.escapeRegex(str)
+    if not str then return "" end
+    return tostring(str):gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+end
+
+--- Echo text with Aardwolf color codes to Mudlet
+-- @param str String with Aardwolf @ color codes
+function snd.utils.aardEcho(str)
+    cecho(snd.utils.aardColorsToMudlet(str))
+end
+
+--- Echo text with Aardwolf color codes + newline
+-- @param str String with Aardwolf @ color codes
+function snd.utils.aardEchoLine(str)
+    cecho(snd.utils.aardColorsToMudlet(str) .. "\n")
+end
+
+-------------------------------------------------------------------------------
+-- SQL Helpers
+-------------------------------------------------------------------------------
+
+--- Escape a string for SQL queries (handles single quotes)
+-- @param sql String to escape
+-- @param likeOperator Optional: "left", "right", or "both" for LIKE wildcards
+-- @return Escaped and quoted string
+function snd.utils.fixsql(sql, likeOperator)
+    if sql == nil then
+        return "NULL"
+    end
+    
+    sql = tostring(sql)
+    sql = sql:gsub("'", "''")
+    
+    if likeOperator then
+        if likeOperator == "left" then
+            return "'%" .. sql .. "'"
+        elseif likeOperator == "right" then
+            return "'" .. sql .. "%'"
+        else
+            return "'%" .. sql .. "%'"
+        end
+    else
+        return "'" .. sql .. "'"
+    end
+end
+
+-------------------------------------------------------------------------------
+-- String Utilities
+-------------------------------------------------------------------------------
+
+--- Convert string to Pascal Case (capitalize each word)
+-- @param str Input string
+-- @return Pascal cased string
+function snd.utils.toPascalCase(str)
+    if not str then return "" end
+    return str:gsub("(%a)([%w_']*)", function(first, rest)
+        return first:upper() .. rest:lower()
+    end)
+end
+
+--- Capitalize first letter of string
+-- @param str Input string
+-- @return Capitalized string
+function snd.utils.capitalize(str)
+    if not str or str == "" then return "" end
+    return str:sub(1, 1):upper() .. str:sub(2):lower()
+end
+
+--- Join table elements with delimiter
+-- @param delimiter String to join with
+-- @param list Table of strings
+-- @return Joined string
+function snd.utils.strjoin(delimiter, list)
+    if not list or #list == 0 then return "" end
+    return table.concat(list, delimiter)
+end
+
+--- Wrap text to specified width
+-- @param line String to wrap
+-- @param length Maximum line length (default 80)
+-- @return Table of wrapped lines
+function snd.utils.wrap(line, length)
+    local lines = {}
+    length = length or 80
+    
+    while #line > length do
+        local col = line:sub(1, length):find("[%s,][^%s,]*$")
+        if col and col > 2 then
+            -- Found a good break point
+        else
+            col = length
+        end
+        
+        table.insert(lines, line:sub(1, col))
+        line = line:sub(col + 1)
+    end
+    
+    table.insert(lines, line)
+    return lines
+end
+
+--- Trim whitespace from right side of string
+-- @param str Input string
+-- @return Trimmed string
+function snd.utils.trimr(str)
+    if not str then return "" end
+    return str:find("^%s*$") and "" or str:match("^(.*%S)")
+end
+
+--- Trim whitespace from both sides of string
+-- @param str Input string
+-- @return Trimmed string
+function snd.utils.trim(str)
+    if not str then return "" end
+    return str:match("^%s*(.-)%s*$")
+end
+
+--- Format a number into readable format (K, M, B, T)
+-- @param num Number to format
+-- @param places Decimal places (default 0)
+-- @return Formatted string
+function snd.utils.readableNumber(num, places)
+    if not num then return "0" end
+    
+    local fmt = "%." .. (places or 0) .. "f"
+    
+    if num >= 1000000000000 then
+        return string.format(fmt .. " T", num / 1000000000000)
+    elseif num >= 1000000000 then
+        return string.format(fmt .. " B", num / 1000000000)
+    elseif num >= 1000000 then
+        return string.format(fmt .. " M", num / 1000000)
+    elseif num >= 1000 then
+        return string.format(fmt .. " K", num / 1000)
+    else
+        return tostring(num)
+    end
+end
+
+-------------------------------------------------------------------------------
+-- Time Formatting
+-------------------------------------------------------------------------------
+
+--- Format seconds into human readable duration
+-- @param seconds Number of seconds
+-- @return Formatted string (e.g., "1h 23m 45s")
+function snd.utils.formatSeconds(seconds)
+    if not tonumber(seconds) then return tostring(seconds) end
+    
+    seconds = tonumber(seconds)
+    
+    if seconds < 1 then
+        return string.format("%.2fs", seconds)
+    end
+    
+    local hours = math.floor(seconds / 3600)
+    seconds = seconds % 3600
+    local mins = math.floor(seconds / 60)
+    seconds = math.floor(seconds % 60)
+    
+    local duration = ""
+    
+    if hours > 0 then
+        duration = hours .. "h "
+    end
+    if mins > 0 then
+        duration = duration .. mins .. "m "
+    end
+    if seconds > 0 or duration == "" then
+        duration = duration .. seconds .. "s"
+    end
+    
+    return snd.utils.trim(duration)
+end
+
+--- Format a duration table or seconds for display
+-- @param duration Either seconds or table with h, m, s keys
+-- @return Formatted string
+function snd.utils.formatDuration(duration)
+    if type(duration) == "number" then
+        return snd.utils.formatSeconds(duration)
+    elseif type(duration) == "table" then
+        local parts = {}
+        if duration.h and duration.h > 0 then
+            table.insert(parts, duration.h .. "h")
+        end
+        if duration.m and duration.m > 0 then
+            table.insert(parts, duration.m .. "m")
+        end
+        if duration.s and duration.s > 0 then
+            table.insert(parts, duration.s .. "s")
+        end
+        return table.concat(parts, " ")
+    end
+    return ""
+end
+
+-------------------------------------------------------------------------------
+-- Level Calculations (Aardwolf-specific)
+-------------------------------------------------------------------------------
+
+--- Calculate actual total level from tier/remort/level
+-- @param level Current level (1-201)
+-- @param remorts Number of remorts (1-7)
+-- @param tier Current tier (0-9)
+-- @param redos Number of redo tiers (0+)
+-- @return Actual total level
+function snd.utils.getActualLevel(level, remorts, tier, redos)
+    if not level then return -1 end
+    
+    tier = tier or 0
+    remorts = remorts or 1
+    redos = redos or 0
+    
+    if redos == 0 then
+        return (tier * 7 * 201) + ((remorts - 1) * 201) + level
+    else
+        return (tier * 7 * 201) + (redos * 7 * 201) + ((remorts - 1) * 201) + level
+    end
+end
+
+--- Convert actual level back to tier/remort/level components
+-- @param actualLevel Total actual level
+-- @return Table with tier, redos, remort, level keys
+function snd.utils.convertLevel(actualLevel)
+    if not actualLevel or actualLevel < 1 then
+        return {tier = -1, redos = -1, remort = -1, level = -1}
+    end
+    
+    actualLevel = tonumber(actualLevel)
+    
+    local tier = math.floor(actualLevel / (7 * 201))
+    if actualLevel % (7 * 201) == 0 then
+        tier = tier - 1
+    end
+    
+    local remort = math.floor((actualLevel - (tier * 7 * 201)) / 202) + 1
+    
+    local level = actualLevel % 201
+    if level == 0 then
+        level = 201
+    end
+    
+    local redos = 0
+    if tier > 9 then
+        redos = tier - 9
+        tier = 9
+    end
+    
+    return {tier = tier, redos = redos, remort = remort, level = level}
+end
+
+-------------------------------------------------------------------------------
+-- Mob Keyword Guessing
+-------------------------------------------------------------------------------
+
+--- Find a keyword for an item/mob name (skip articles)
+-- @param item Full name of item/mob
+-- @return Best keyword to use
+function snd.utils.findKeyword(item)
+    if not item then return "" end
+    
+    local badwords = {
+        ["a"] = true, ["an"] = true, ["the"] = true, ["of"] = true,
+        ["some"] = true, ["and"] = true, ["or"] = true
+    }
+    
+    for word in item:gmatch("%S+") do
+        word = word:gsub("[',]", "")
+        if not badwords[word:lower()] then
+            return word:lower()
+        end
+    end
+    
+    return item:lower()
+end
+
+-------------------------------------------------------------------------------
+-- Conditional Helper
+-------------------------------------------------------------------------------
+
+--- Inline conditional (ternary operator helper)
+-- @param condition Boolean condition
+-- @param trueVal Value if true
+-- @param falseVal Value if false
+-- @return trueVal or falseVal based on condition
+function snd.utils.ifc(condition, trueVal, falseVal)
+    if condition then
+        return trueVal
+    else
+        return falseVal
+    end
+end
+
+-------------------------------------------------------------------------------
+-- Note/Echo Helpers (styled output)
+-------------------------------------------------------------------------------
+
+snd.utils.NOTE_COLORS = {
+    INFO = "#FF5000",
+    INFO_HIGHLIGHT = "#00B4E0",
+    IMPORTANT = "#FFFFFF",
+    IMPORTANT_HIGHLIGHT = "#00FF00",
+    IMPORTANT_BACKGROUND = "#000080",
+    ERROR = "#FFFFFF",
+    ERROR_HIGHLIGHT = "#FFE32E",
+    ERROR_BACKGROUND = "#650101",
+    DEBUG = "#87CEFA",
+    DEBUG_HIGHLIGHT = "#FFD700",
+}
+
+--- Output an info note
+function snd.utils.infoNote(...)
+    if snd and snd.config and snd.config.silentMode then
+        return
+    end
+    local args = {...}
+    local msg = table.concat(args, "")
+    cecho("\n<orange>[S&D]<reset> <cyan>" .. msg .. "<reset>\n")
+end
+
+--- Output an error note
+function snd.utils.errorNote(...)
+    local args = {...}
+    local msg = table.concat(args, "")
+    cecho("<red>[S&D ERROR]<reset> <yellow>" .. msg .. "<reset>\n")
+end
+
+--- Output a debug note (only if debug mode is on)
+function snd.utils.debugNote(...)
+    if snd.config and snd.config.debugMode then
+        local args = {...}
+        local msg = table.concat(args, "")
+        cecho("<dim_gray>[S&D DEBUG]<reset> <gray>" .. msg .. "<reset>\n")
+    end
+end
+
+--- Output a quick-where debug note (only if debug mode is on)
+function snd.utils.qwDebugNote(...)
+    if snd.config and snd.config.debugMode then
+        local args = {...}
+        local msg = table.concat(args, "")
+        cecho("\n<orange>[S&D]<reset> <cyan>" .. msg .. "<reset>\n")
+    end
+end
+
+--- Build plain text label for history/event output by type
+-- @param eventType quest|campaign|gquest|gold|history|general
+-- @return prefix label and cecho color name
+function snd.utils.getReportTypeStyle(eventType)
+    local t = tostring(eventType or "general"):lower()
+    local map = {
+        quest = {label = "QUEST", cecho = "red"},
+        campaign = {label = "CAMPAIGN", cecho = "green"},
+        gquest = {label = "GQUEST", cecho = "dodger_blue"},
+        gold = {label = "GOLD", cecho = "yellow"},
+        history = {label = "HISTORY", cecho = "magenta"},
+        general = {label = "SND", cecho = "cyan"},
+    }
+    return map[t] or map.general
+end
+
+--- Convert a style type to Aard color code for outbound channel text
+-- @param eventType quest|campaign|gquest|gold|history|general
+-- @return Aard color code like @R
+function snd.utils.getReportAardColor(eventType)
+    local t = tostring(eventType or "general"):lower()
+    local map = {
+        quest = "@R",
+        campaign = "@G",
+        gquest = "@C",
+        gold = "@Y",
+        history = "@M",
+        general = "@W",
+    }
+    return map[t] or map.general
+end
+
+--- True when report channel should render as local echo output
+-- @param channel string configured report channel
+-- @return boolean
+function snd.utils.isDefaultReportChannel(channel)
+    channel = snd.utils.trim(channel or ""):lower()
+    return channel == "" or channel == "default" or channel == "echo"
+end
+
+--- Route a formatted report line to default echo or configured channel
+-- @param text string Text to report
+-- @param eventType string semantic type for color coding
+-- @return true if delivered, false otherwise
+function snd.utils.reportLine(text, eventType)
+    text = snd.utils.trim(text or "")
+    if text == "" then
+        return false
+    end
+
+    local style = snd.utils.getReportTypeStyle(eventType)
+    local channel = "default"
+    if snd.config and snd.config.reportChannel then
+        channel = snd.utils.trim(snd.config.reportChannel)
+    end
+
+    if snd.utils.isDefaultReportChannel(channel) then
+        cecho(string.format("\n<orange>[S&D]<reset> <%s>%s<reset>\n", style.cecho, text))
+        return true
+    end
+
+    local payload = string.format("%s[%s]@x %s", snd.utils.getReportAardColor(eventType), style.label, text)
+    if snd.commands and snd.commands.sendGameCommand then
+        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
+    end
+
+    send(channel .. " " .. payload, false)
+    return true
+end
+
+--- Format quest duration for completion output as H/M/S with minutes included.
+-- @param seconds number Duration in seconds
+-- @return string Formatted duration (e.g., "0m 11s", "1h 3m 4s")
+function snd.utils.formatQuestCompletionDuration(seconds)
+    local totalSeconds = tonumber(seconds)
+    if not totalSeconds then
+        return ""
+    end
+
+    totalSeconds = math.max(0, math.floor(totalSeconds))
+    local hours = math.floor(totalSeconds / 3600)
+    local mins = math.floor((totalSeconds % 3600) / 60)
+    local secs = totalSeconds % 60
+
+    if hours > 0 then
+        return string.format("%dh %dm %ds", hours, mins, secs)
+    end
+
+    return string.format("%dm %ds", mins, secs)
+end
+
+--- Report quest completion with segmented colors (matches history reward colors)
+-- @param qp number Total QP reward
+-- @param gold number Gold reward
+-- @param durationSeconds number|nil Optional completion duration in seconds
+-- @return true if delivered, false otherwise
+function snd.utils.reportQuestCompletion(qp, gold, durationSeconds)
+    qp = tonumber(qp) or 0
+    gold = tonumber(gold) or 0
+    local durationText = snd.utils.formatQuestCompletionDuration(durationSeconds)
+    local durationSuffix = ""
+    if durationText ~= "" then
+        durationSuffix = string.format(", <cyan>Duration: %s<reset>", durationText)
+    end
+
+    local channel = "default"
+    if snd.config and snd.config.reportChannel then
+        channel = snd.utils.trim(snd.config.reportChannel)
+    end
+
+    if snd.utils.isDefaultReportChannel(channel) then
+        cecho(string.format(
+            "<orange>[S&D]<reset> <magenta>Quest complete!<reset> <red>QP: %d<reset>, <yellow>Gold: %d<reset>%s\n",
+            qp,
+            gold,
+            durationSuffix
+        ))
+        return true
+    end
+
+    local channelDurationSuffix = ""
+    if durationText ~= "" then
+        channelDurationSuffix = string.format(", @cDuration: %s@x", durationText)
+    end
+    local payload = string.format("@MQuest complete!@x @rQP: %d@x, @yGold: %d@x%s", qp, gold, channelDurationSuffix)
+    if snd.commands and snd.commands.sendGameCommand then
+        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
+    end
+
+    send(channel .. " " .. payload, false)
+    return true
+end
+
+--- Report campaign completion with rewards and duration from history.
+-- @param rewards table|nil Reward table with qp, gold, tp, trains, pracs fields
+-- @param durationSeconds number|nil Optional completion duration in seconds
+-- @return true if delivered, false otherwise
+function snd.utils.reportCampaignCompletion(rewards, durationSeconds)
+    rewards = rewards or {}
+    local qp = tonumber(rewards.qp) or 0
+    local gold = tonumber(rewards.gold) or 0
+    local tp = tonumber(rewards.tp) or 0
+    local trains = tonumber(rewards.trains) or 0
+    local pracs = tonumber(rewards.pracs) or 0
+    local durationText = snd.utils.formatQuestCompletionDuration(durationSeconds)
+
+    local parts = {
+        string.format("<red>QP: %d<reset>", qp),
+        string.format("<yellow>Gold: %d<reset>", gold),
+    }
+    if tp > 0 then table.insert(parts, string.format("<white>TP: %d<reset>", tp)) end
+    if trains > 0 then table.insert(parts, string.format("<cyan>Trains: %d<reset>", trains)) end
+    if pracs > 0 then table.insert(parts, string.format("<green>Pracs: %d<reset>", pracs)) end
+    if durationText ~= "" then table.insert(parts, string.format("<cyan>Duration: %s<reset>", durationText)) end
+    local rewardText = table.concat(parts, ", ")
+
+    local channel = "default"
+    if snd.config and snd.config.reportChannel then
+        channel = snd.utils.trim(snd.config.reportChannel)
+    end
+
+    if snd.utils.isDefaultReportChannel(channel) then
+        cecho(string.format(
+            "<orange>[S&D]<reset> <green>Campaign complete!<reset> %s\n",
+            rewardText
+        ))
+        return true
+    end
+
+    local channelParts = {
+        string.format("@rQP: %d@x", qp),
+        string.format("@yGold: %d@x", gold),
+    }
+    if tp > 0 then table.insert(channelParts, string.format("@wTP: %d@x", tp)) end
+    if trains > 0 then table.insert(channelParts, string.format("@cTrains: %d@x", trains)) end
+    if pracs > 0 then table.insert(channelParts, string.format("@gPracs: %d@x", pracs)) end
+    if durationText ~= "" then table.insert(channelParts, string.format("@cDuration: %s@x", durationText)) end
+    local payload = string.format("@GCampaign complete!@x %s", table.concat(channelParts, ", "))
+    if snd.commands and snd.commands.sendGameCommand then
+        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
+    end
+
+    send(channel .. " " .. payload, false)
+    return true
+end
+
+-------------------------------------------------------------------------------
+-- Table Utilities
+-------------------------------------------------------------------------------
+
+--- Deep copy a table
+-- @param orig Original table
+-- @return Copy of table
+function snd.utils.deepcopy(orig)
+    local copy
+    if type(orig) == "table" then
+        copy = {}
+        for k, v in next, orig, nil do
+            copy[snd.utils.deepcopy(k)] = snd.utils.deepcopy(v)
+        end
+        setmetatable(copy, snd.utils.deepcopy(getmetatable(orig)))
+    else
+        copy = orig
+    end
+    return copy
+end
+
+--- Check if table contains value
+-- @param tbl Table to search
+-- @param val Value to find
+-- @return true if found, false otherwise
+function snd.utils.tableContains(tbl, val)
+    if not tbl then return false end
+    for _, v in pairs(tbl) do
+        if v == val then return true end
+    end
+    return false
+end
+
+--- Get table length (works for non-sequential tables)
+-- @param tbl Table to count
+-- @return Number of elements
+function snd.utils.tableLength(tbl)
+    if not tbl then return 0 end
+    local count = 0
+    for _ in pairs(tbl) do count = count + 1 end
+    return count
+end
+
+-- Search and Destroy: Utilities module loaded silently

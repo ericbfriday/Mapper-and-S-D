@@ -1,0 +1,901 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MudletPackage version="1.0">
+  <ScriptGroup isActive="yes" isFolder="yes" name="mmapper">
+    <Script isActive="yes" isFolder="no" name="mm_core"><![CDATA[
+mm = mm or {}
+
+mm.state = mm.state or {
+  quick_mode = true,
+  shownotes = true,
+  compact_mode = false,
+  show_up_down = false,
+  underline_links = true,
+  minimap = { enabled = true, show_room = true, show_exits = true, show_coords = true, echo = true },
+  windows = {
+    minimap = { x = "70%", y = "0%", width = "30%", height = "35%", max_lines = 16, enabled = true, locked = false },
+    bigmap = { x = "45%", y = "35%", width = "55%", height = "65%", max_lines = 60, enabled = true, locked = false },
+  },
+  last_target = nil,
+  map_db = "Aardwolf.db",
+  native_mapper_db = "Aardwolf.db",
+  auto_locate = true,
+  center_on_locate = false,
+}
+
+mm.runtime = mm.runtime or {
+  located_once = false,
+}
+
+function mm.note(msg)
+  cecho(string.format("<CornflowerBlue>[MMAPPER]<reset> %s\n", msg))
+end
+
+function mm.room_note(msg)
+  cecho(string.format("<CornflowerBlue>[MMAPPER]<reset> <yellow>%s<reset>\n", msg))
+end
+
+function mm.warn(msg)
+  cecho(string.format("<orange_red>[MMAPPER]<reset> %s\n", msg))
+end
+
+function mm.bool_arg(v, default)
+  if v == nil or v == "" then return default end
+  v = tostring(v):lower()
+  if v == "on" or v == "true" or v == "1" then return true end
+  if v == "off" or v == "false" or v == "0" then return false end
+  return default
+end
+
+function mm.path_exists(path)
+  local f = io.open(path, "rb")
+  if not f then return false end
+  f:close()
+  return true
+end
+
+
+function mm.read_file_header(path, n)
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local data = f:read(n or 16)
+  f:close()
+  return data
+end
+
+function mm.looks_like_sqlite(path)
+  local hdr = mm.read_file_header(path, 16)
+  return hdr and hdr:find("^SQLite format 3") ~= nil
+end
+
+function mm.resolve_native_mapper_db(path)
+  local p = path or mm.state.native_mapper_db
+  if not p or p == "" then return nil end
+  p = tostring(p)
+
+  if p:sub(1, 1) == "/" or p:match("^%a:[/\\]") then
+    return p
+  end
+
+  return getMudletHomeDir() .. "/" .. p
+end
+
+function mm.set_native_mapper_db(path)
+  mm.state.native_mapper_db = path
+  local resolved = mm.resolve_native_mapper_db(path)
+  mm.note("Native mapper DB set to: " .. tostring(resolved))
+end
+
+function mm.load_native_mapper_db(path)
+  local resolved = mm.resolve_native_mapper_db(path)
+  if not resolved then
+    return false, "native mapper DB path is empty"
+  end
+
+  if not mm.path_exists(resolved) then
+    return false, "native mapper DB not found at " .. resolved
+  end
+
+  if mm.looks_like_sqlite(resolved) then
+    return false, "file looks like SQLite (likely Mushclient/Aard mapper DB), not Mudlet map export; run: mapper native convert " .. tostring(mm.state.map_db)
+  end
+
+  if type(loadMap) ~= "function" then
+    return false, "Mudlet API loadMap() is unavailable"
+  end
+
+  local ok, result = pcall(loadMap, resolved)
+  if not ok then
+    return false, "loadMap() errored: " .. tostring(result)
+  end
+
+  if result == false then
+    return false, "loadMap() returned false"
+  end
+
+  mm.state.native_mapper_db = path or mm.state.native_mapper_db
+  mm.note("Loaded native Mudlet mapper DB: " .. resolved)
+  return true
+end
+
+function mm.current_room()
+  if gmcp and gmcp.Room and gmcp.Room.Info and gmcp.Room.Info.num then
+    return tonumber(gmcp.Room.Info.num)
+  end
+  return nil
+end
+
+function mm.goto_room(target)
+  target = tonumber(target)
+  if not target then
+    return false, "invalid room"
+  end
+
+  if type(expandAlias) ~= "function" then
+    return false, "expandAlias is unavailable"
+  end
+
+  expandAlias("xrt " .. target)
+  mm.state.last_target = target
+  return true
+end
+
+function mm.walkto_room(target)
+  target = tonumber(target)
+  if not target then return false, "invalid room" end
+
+  if not (snd and snd.mapper and type(snd.mapper.walkTo) == "function") then
+    return false, "walkto requires snd.mapper.walkTo for no-portal pathfinding"
+  end
+
+  local ok, result = pcall(snd.mapper.walkTo, tostring(target))
+  if not ok then
+    return false, "walkto failed: " .. tostring(result)
+  end
+  if result == false then
+    return false, "no no-portal path found"
+  end
+
+  mm.state.last_target = target
+  return true
+end
+
+function mm.resume()
+  if not mm.state.last_target then
+    return false, "no previous mapper target"
+  end
+  return mm.goto_room(mm.state.last_target)
+end
+
+function mm.print_room_details(room)
+  room = tonumber(room) or mm.current_room()
+  if not room then
+    mm.warn("No room information available yet.")
+    return
+  end
+  mm.note("Room: " .. room)
+  if gmcp and gmcp.Room and gmcp.Room.Info then
+    local info = gmcp.Room.Info
+    mm.note("Name: " .. tostring(info.name or "?"))
+    mm.note("Area: " .. tostring(info.zone or info.area or "?"))
+    mm.note("Terrain: " .. tostring(info.terrain or "?"))
+  end
+end
+
+    ]]></Script>
+    <Script isActive="yes" isFolder="no" name="mm_help"><![CDATA[
+mm = mm or {}
+
+mm.help_header = "                              [GMCP Mapper Help]"
+mm.help_index = [[
+                           Mapper Help Index
+    end
+  end
+end
+
+local function create_miniconsole(which)
+  local cfg = ensure_geom(which)
+  local name = string.format("mm_%s_console", which)
+
+  local console = Geyser.MiniConsole:new({
+    name = name,
+    x = cfg.x,
+    y = cfg.y,
+    width = cfg.width,
+    height = cfg.height,
+  })
+  console:setColor(0, 0, 0, 180)
+  console:setFontSize(which == "bigmap" and 9 or 8)
+
+  mm.minimap.windows[which] = {
+    kind = "miniconsole",
+    console = console,
+  }
+
+  set_window_visibility(which, cfg.enabled)
+
+  return mm.minimap.windows[which]
+end
+
+local function create_bigmap_mapper()
+  local cfg = ensure_geom("bigmap")
+  local mapper_container_name = "mm_bigmap_mapper_container"
+
+  if not (Geyser and Geyser.Mapper and Geyser.Mapper.new) then
+    return nil, "Geyser.Mapper not available"
+  end
+
+  local ok_container, container = pcall(function()
+    return Geyser.Container:new({
+      name = mapper_container_name,
+      x = cfg.x,
+      y = cfg.y,
+      width = cfg.width,
+      height = cfg.height,
+    })
+  end)
+
+  if not ok_container or not container then
+    return nil, "failed to create mapper container"
+  end
+
+  local ok_mapper, mapper = pcall(function()
+    return Geyser.Mapper:new({
+      name = "mm_bigmap_mapper",
+      x = 0,
+      y = 0,
+      width = "100%",
+      height = "100%",
+    }, container)
+  end)
+
+  if not ok_mapper or not mapper then
+    return nil, "failed to create Geyser.Mapper"
+  end
+
+  mm.minimap.windows.bigmap = {
+    kind = "mudlet_mapper",
+    container = container,
+    mapper = mapper,
+  }
+
+  set_window_visibility("bigmap", cfg.enabled)
+  return mm.minimap.windows.bigmap
+end
+
+local function create_window(which)
+  ensure_window_storage()
+  if mm.minimap.windows[which] then
+    return mm.minimap.windows[which]
+  end
+
+  if which == "bigmap" then
+    local win, err = create_bigmap_mapper()
+    if win then
+      mm.minimap.backend = "mudlet_mapper"
+      mm.note("Big map builder is using Mudlet's native mapper widget.")
+      mm.minimap.lines.bigmap = mm.minimap.lines.bigmap or {}
+      return win
+    end
+    mm.warn("Mudlet mapper widget unavailable for bigmap (" .. tostring(err) .. "). Falling back to ASCII console.")
+  end
+
+  local fallback = create_miniconsole(which)
+  mm.minimap.lines[which] = mm.minimap.lines[which] or {}
+  if which == "bigmap" then
+    mm.minimap.backend = "ascii_fallback"
+  end
+  return fallback
+end
+
+local function set_geom(which, x, y, w, h)
+  local cfg = ensure_geom(which)
+  cfg.x = to_percent(x or cfg.x)
+  cfg.y = to_percent(y or cfg.y)
+  cfg.width = to_percent(w or cfg.width)
+  cfg.height = to_percent(h or cfg.height)
+
+  local win = create_window(which)
+
+  if win.kind == "mudlet_mapper" and win.container then
+    win.container:move(cfg.x, cfg.y)
+    win.container:resize(cfg.width, cfg.height)
+  elseif win.console then
+    win.console:move(cfg.x, cfg.y)
+    win.console:resize(cfg.width, cfg.height)
+  end
+end
+
+function mm.minimap.init()
+  create_window("minimap")
+  create_window("bigmap")
+end
+
+function mm.minimap.push_line(line)
+  if not mm.state.minimap.enabled then return end
+  mm.minimap.init()
+
+  for _, which in ipairs({ "minimap", "bigmap" }) do
+    local cfg = ensure_geom(which)
+    local lines = mm.minimap.lines[which] or {}
+    mm.minimap.lines[which] = lines
+    table.insert(lines, line)
+    while #lines > cfg.max_lines do
+      table.remove(lines, 1)
+    end
+  end
+
+  mm.minimap.redraw("minimap")
+  mm.minimap.redraw("bigmap")
+end
+
+function mm.minimap.redraw(which)
+  local w = mm.minimap.windows and mm.minimap.windows[which]
+  if not w then return end
+
+  if which == "bigmap" and w.kind == "mudlet_mapper" then
+    -- Native mapper draws itself from Mudlet's map DB/room state.
+    -- We intentionally do not print ASCII lines into it.
+    return
+  end
+
+  local console = w.console
+  if not console then return end
+  console:clear()
+
+  for _, line in ipairs((mm.minimap.lines and mm.minimap.lines[which]) or {}) do
+    console:echo(line .. "\n")
+  end
+end
+
+function mm.minimap.toggle_show(setting, option)
+  local state = option == "on"
+  if setting:find("^room") then
+    mm.state.minimap.show_room = state
+  elseif setting == "exits" then
+    mm.state.minimap.show_exits = state
+  elseif setting:find("^coord") then
+    mm.state.minimap.show_coords = state
+  elseif setting == "echo" then
+    mm.state.minimap.echo = state
+  end
+  mm.note(string.format("Minimap setting '%s' is now %s.", setting, option))
+end
+
+function mm.minimap.set_type(kind)
+  mm.state.minimap.type = kind
+  send("maptype " .. tostring(kind))
+  mm.note("Map type set to '" .. tostring(kind) .. "'.")
+end
+
+function mm.minimap.set_window_visible(which, visible)
+  local cfg = ensure_geom(which)
+  cfg.enabled = visible and true or false
+  create_window(which)
+  set_window_visibility(which, cfg.enabled)
+  mm.note(string.format("%s window %s.", which, cfg.enabled and "shown" or "hidden"))
+end
+
+function mm.minimap.move_window(which, x, y)
+  local cfg = ensure_geom(which)
+  if cfg.locked then
+    mm.warn(which .. " window is locked. Unlock it before moving.")
+    return
+  end
+  set_geom(which, x, y, cfg.width, cfg.height)
+  mm.note(string.format("Moved %s window to %s, %s.", which, cfg.x, cfg.y))
+end
+
+function mm.minimap.resize_window(which, width, height)
+  local cfg = ensure_geom(which)
+  if cfg.locked then
+    mm.warn(which .. " window is locked. Unlock it before resizing.")
+    return
+  end
+  set_geom(which, cfg.x, cfg.y, width, height)
+  mm.note(string.format("Resized %s window to %s x %s.", which, cfg.width, cfg.height))
+end
+
+function mm.minimap.lock_window(which, on)
+  local cfg = ensure_geom(which)
+  cfg.locked = on and true or false
+  mm.note(string.format("%s window position lock %s.", which, cfg.locked and "enabled" or "disabled"))
+end
+
+function mm.minimap.show_all()
+  mm.minimap.set_window_visible("minimap", true)
+  mm.minimap.set_window_visible("bigmap", true)
+end
+
+function mm.minimap.hide_all()
+  mm.minimap.set_window_visible("minimap", false)
+  mm.minimap.set_window_visible("bigmap", false)
+end
+
+    ]]></Script>
+    <Script isActive="yes" isFolder="no" name="mm_commands"><![CDATA[
+mm = mm or {}
+
+local function handle_window_command(which, action, a, b)
+  which = which == "map" and "bigmap" or which
+  if action == "show" then
+    mm.minimap.set_window_visible(which, true)
+  elseif action == "hide" then
+    mm.minimap.set_window_visible(which, false)
+  elseif action == "move" then
+    mm.minimap.move_window(which, a, b)
+  elseif action == "resize" then
+    mm.minimap.resize_window(which, a, b)
+  elseif action == "lock" then
+    mm.minimap.lock_window(which, true)
+  elseif action == "unlock" then
+    mm.minimap.lock_window(which, false)
+  end
+end
+
+local function run_inspect(source)
+  local ok, info = mm.import.inspect_sqlite(source)
+  if not ok then
+    mm.warn(info)
+    return
+  end
+
+  mm.note("inspect path: " .. tostring(info.path))
+  mm.note(string.format("inspect: compatible=%s, rooms=%d, exits=%d", tostring(info.compatible), info.room_count or 0, info.exit_count or 0))
+  if not info.compatible then
+    mm.warn("Missing: " .. table.concat(info.missing or {}, ", "))
+  end
+end
+
+mm.alias_specs = {
+  {"^mapper help(?: (.*))?$", function(m) mm.show_help(m[2]) end},
+  {"^mapper goto (.+)$", function(m) local ok, err = mm.goto_room(m[2]); if not ok then mm.warn(err) end end},
+  {"^mapper walkto (.+)$", function(m) local ok, err = mm.walkto_room(m[2]); if not ok then mm.warn(err) end end},
+  {"^mapper resume$", function() local ok, err = mm.resume(); if not ok then mm.warn(err) end end},
+  {"^mapper stop$", function() send("stop") end},
+  {"^mapper thisroom$", function() mm.print_room_details() end},
+  {"^mapper showroom (.+)$", function(m) mm.print_room_details(m[2]) end},
+  {"^mapper quicklist(?: (on|off))?$", function(m) mm.state.quick_mode = mm.bool_arg(m[2], not mm.state.quick_mode); mm.note("quicklist " .. (mm.state.quick_mode and "on" or "off")) end},
+  {"^mapper shownotes(?: (on|off))?$", function(m) mm.state.shownotes = mm.bool_arg(m[2], not mm.state.shownotes); mm.note("shownotes " .. (mm.state.shownotes and "on" or "off")) end},
+  {"^mapper compact(?: (on|off))?$", function(m) mm.state.compact_mode = mm.bool_arg(m[2], not mm.state.compact_mode); mm.note("compact " .. (mm.state.compact_mode and "on" or "off")) end},
+  {"^mapper updown$", function() mm.state.show_up_down = not mm.state.show_up_down; mm.note("updown " .. (mm.state.show_up_down and "on" or "off")) end},
+  {"^mapper underlines?$", function() mm.state.underline_links = not mm.state.underline_links; mm.note("underlines " .. (mm.state.underline_links and "on" or "off")) end},
+  {"^mapper autolocate(?: (on|off))?$", function(m) mm.state.auto_locate = mm.bool_arg(m[2], not mm.state.auto_locate); mm.note("autolocate " .. (mm.state.auto_locate and "on" or "off")) end},
+  {"^mapper centerlocate(?: (on|off))?$", function(m) mm.state.center_on_locate = mm.bool_arg(m[2], not mm.state.center_on_locate); mm.note("centerlocate " .. (mm.state.center_on_locate and "on" or "off")) end},
+  {"^mapper locate$", function() send("look") end},
+  {"^mapper database$", function() mm.note("Current mapper database: " .. mm.state.map_db) end},
+  {"^mapper set database (.+)$", function(m) mm.state.map_db = m[2]; mm.note("Mapper database set to " .. m[2]) end},
+  {"^mapper native db$", function() mm.note("Native mapper DB: " .. tostring(mm.resolve_native_mapper_db(mm.state.native_mapper_db))) end},
+  {"^mapper native db (.+)$", function(m) mm.set_native_mapper_db(m[2]) end},
+  {"^mapper native load$", function() local ok, err = mm.load_native_mapper_db(); if not ok then mm.warn(err) end end},
+  {"^mapper native load (.+)$", function(m) local ok, err = mm.load_native_mapper_db(m[2]); if not ok then mm.warn(err) end end},
+  {"^mapper native inspect$", function() run_inspect(mm.state.map_db) end},
+  {"^mapper native inspect (.+)$", function(m) run_inspect(m[2]) end},
+  {"^mapper native convert$", function() local ok, err = mm.import.convert_sqlite_to_mudlet(mm.state.map_db); if not ok then mm.warn(err) end end},
+  {"^mapper native convert (.+) to (.+)$", function(m) local ok, err = mm.import.convert_sqlite_to_mudlet(m[2], m[3]); if not ok then mm.warn(err) end end},
+  {"^mapper native convert (.+)$", function(m) local ok, err = mm.import.convert_sqlite_to_mudlet(m[2]); if not ok then mm.warn(err) end end},
+  {"^mapper hide$", function() mm.minimap.hide_all() end},
+  {"^mapper show$", function() mm.minimap.show_all() end},
+  {"^mapper (minimap|bigmap|map) (show|hide|lock|unlock)$", function(m) handle_window_command(m[2], m[3]) end},
+  {"^mapper (minimap|bigmap|map) move (%S+) (%S+)$", function(m) handle_window_command(m[2], "move", m[3], m[4]) end},
+  {"^mapper (minimap|bigmap|map) resize (%S+) (%S+)$", function(m) handle_window_command(m[2], "resize", m[3], m[4]) end},
+  {"^maptype (.+)$", function(m) mm.minimap.set_type(m[2]) end},
+  {"^mapshow (roomname|room|exits|coordinates|coordinate|coords|coord|echo) (on|off)$", function(m) mm.minimap.toggle_show(m[2], m[3]) end},
+  {"^resetaard$", function() mm.note("Mapper reset complete.") end},
+  {"^recon?$", function() send("recon") end},
+}
+
+mm.stubbed = {
+  "mapper findpath", "mapper find", "mapper shops", "mapper train", "mapper quest",
+  "mapper where", "mapper unmapped", "mapper notes", "mapper bookmarks", "mapper purgezone",
+  "mapper purgeroom", "mapper clearcache", "mapper area", "mapper list", "mapper next",
+  "mapper portals", "mapper portal", "mapper fullportal", "mapper delete portal", "mapper editportal",
+  "mapper portalrecall", "mapper portallevel", "mapper delete note", "mapper purge portals",
+  "mapper cexits", "mapper deletedcexits", "mapper deletecexit", "mapper restorecexit",
+  "mapper cexit", "mapper fullcexit", "mapper cexit_wait", "mapper areas",
+  "mapper addnote", "mapper bounceportal", "mapper bouncerecall", "mapper noportal", "mapper norecall",
+  "mapper ignore mismatch", "mapper backup", "mapper backups", "mapper lockexit", "mapper zoom in", "mapper zoom out",
+}
+
+function mm.handle_command(line)
+  for _, spec in ipairs(mm.alias_specs) do
+    local matches = {line:match(spec[1])}
+    if #matches > 0 then
+      table.insert(matches, 1, line)
+      spec[2](matches)
+      return true
+    end
+  end
+
+  if line:find("^mapper ") then
+    for _, prefix in ipairs(mm.stubbed) do
+      if line:find("^" .. prefix) then
+        mm.warn("Command recognized but not yet implemented in Mudlet port: " .. line)
+        return true
+      end
+    end
+  end
+  return false
+end
+
+function mm.register_aliases()
+  if mm._alias then return end
+  mm._alias = tempAlias("^(mapper .+|maptype .+|mapshow .+|resetaard|recon?)$", function()
+    local line = matches[2]
+    if mm.handle_command(line) then return end
+  end)
+end
+
+    ]]></Script>
+    <Script isActive="yes" isFolder="no" name="mm_import"><![CDATA[
+mm = mm or {}
+mm.import = mm.import or {}
+
+local function require_luasql()
+  local ok, mod = pcall(require, "luasql.sqlite3")
+  if not ok then
+    return nil, "LuaSQL sqlite3 module not available"
+  end
+  return mod
+end
+
+local function open_sqlite(path)
+  local luasql, err = require_luasql()
+  if not luasql then return nil, nil, err end
+
+  local env = luasql.sqlite3()
+  if not env then
+    return nil, nil, "failed to create sqlite3 environment"
+  end
+
+  local conn, conn_err = env:connect(path)
+  if not conn then
+    env:close()
+    return nil, nil, "failed to connect sqlite DB: " .. tostring(conn_err)
+  end
+
+  return env, conn
+end
+
+local function sqlite_query(conn, sql)
+  local cursor, err = conn:execute(sql)
+  if not cursor then
+    return nil, tostring(err)
+  end
+
+  local rows = {}
+  local row = cursor:fetch({}, "a")
+  while row do
+    local copy = {}
+    for k, v in pairs(row) do
+      copy[k] = v
+    end
+    table.insert(rows, copy)
+    row = cursor:fetch(row, "a")
+  end
+  cursor:close()
+  return rows
+end
+
+local function clear_mudlet_map()
+  local existingRooms = getRooms() or {}
+  for roomId, _ in pairs(existingRooms) do
+    deleteRoom(roomId)
+  end
+
+  local existingAreas = getAreaTable() or {}
+  for _, id in pairs(existingAreas) do
+    if id ~= -1 then
+      deleteArea(id)
+    end
+  end
+end
+
+local function get_columns(conn, table_name)
+  local rows, err = sqlite_query(conn, string.format("PRAGMA table_info('%s')", table_name))
+  if not rows then return nil, err end
+
+  local cols = {}
+  for _, row in ipairs(rows) do
+    cols[row.name] = true
+  end
+  return cols
+end
+
+local function has_col(cols, name)
+  return cols and cols[name] == true
+end
+
+function mm.import.inspect_sqlite(source_path)
+  local source = mm.resolve_native_mapper_db(source_path)
+  if not source or not mm.path_exists(source) then
+    return false, "source DB not found: " .. tostring(source)
+  end
+
+  local env, conn, openErr = open_sqlite(source)
+  if not conn then
+    return false, openErr
+  end
+
+  local ok, data = pcall(function()
+    local tables = {}
+    local tblRows, tblErr = sqlite_query(conn, "SELECT name FROM sqlite_master WHERE type='table'")
+    if not tblRows then error(tblErr) end
+    for _, row in ipairs(tblRows) do
+      tables[row.name] = true
+    end
+
+    local roomCols = get_columns(conn, "rooms") or {}
+    local exitCols = get_columns(conn, "exits") or {}
+
+    local roomCount = sqlite_query(conn, "SELECT COUNT(*) AS cnt FROM rooms")
+    local exitCount = sqlite_query(conn, "SELECT COUNT(*) AS cnt FROM exits")
+
+    local out = {
+      path = source,
+      has_rooms = tables.rooms == true,
+      has_exits = tables.exits == true,
+      room_columns = roomCols,
+      exit_columns = exitCols,
+      room_count = tonumber(roomCount and roomCount[1] and roomCount[1].cnt) or 0,
+      exit_count = tonumber(exitCount and exitCount[1] and exitCount[1].cnt) or 0,
+    }
+
+    local required_rooms = { "uid", "name", "area", "x", "y", "z" }
+    local required_exits = { "fromuid", "touid", "dir" }
+
+    out.compatible = out.has_rooms and out.has_exits
+    out.missing = {}
+
+    for _, col in ipairs(required_rooms) do
+      if not has_col(roomCols, col) then
+        out.compatible = false
+        table.insert(out.missing, "rooms." .. col)
+      end
+    end
+    for _, col in ipairs(required_exits) do
+      if not has_col(exitCols, col) then
+        out.compatible = false
+        table.insert(out.missing, "exits." .. col)
+      end
+    end
+
+    return out
+  end)
+
+  conn:close()
+  env:close()
+
+  if not ok then
+    return false, tostring(data)
+  end
+
+  return true, data
+end
+
+local function import_rooms(conn, roomCols)
+  local areaRows, areaErr = sqlite_query(conn, "SELECT DISTINCT area FROM rooms WHERE area IS NOT NULL AND area != ''")
+  if not areaRows then return nil, areaErr end
+
+  local areaMap = {}
+  for _, row in ipairs(areaRows) do
+    local areaName = row.area
+    if areaName and areaName ~= "" then
+      local areaId = addAreaName(areaName)
+      if areaId then
+        areaMap[areaName] = areaId
+      end
+    end
+  end
+
+  local optional = {}
+  if has_col(roomCols, "norecall") then table.insert(optional, "norecall") end
+  if has_col(roomCols, "noportal") then table.insert(optional, "noportal") end
+
+  local select_cols = "uid, name, area, x, y, z"
+  if #optional > 0 then
+    select_cols = select_cols .. ", " .. table.concat(optional, ", ")
+  end
+
+  local roomRows, roomErr = sqlite_query(conn, "SELECT " .. select_cols .. " FROM rooms")
+  if not roomRows then return nil, roomErr end
+
+  local createdRooms = 0
+  for _, room in ipairs(roomRows) do
+    local roomId = tonumber(room.uid)
+    if roomId and roomId > 0 and addRoom(roomId) then
+      if room.name then setRoomName(roomId, room.name) end
+      if room.area and areaMap[room.area] then setRoomArea(roomId, areaMap[room.area]) end
+      setRoomCoordinates(roomId, tonumber(room.x) or 0, tonumber(room.y) or 0, tonumber(room.z) or 0)
+
+      if tonumber(room.noportal) == 1 then
+        setRoomChar(roomId, "P")
+      elseif tonumber(room.norecall) == 1 then
+        setRoomChar(roomId, "R")
+      end
+
+      createdRooms = createdRooms + 1
+    end
+  end
+
+  return { rooms = createdRooms, areas = #areaRows }
+end
+
+local function import_exits(conn)
+  local dirMap = {
+    n = "north", s = "south", e = "east", w = "west",
+    u = "up", d = "down",
+    ne = "northeast", nw = "northwest", se = "southeast", sw = "southwest",
+    north = "north", south = "south", east = "east", west = "west",
+    up = "up", down = "down", northeast = "northeast", northwest = "northwest",
+    southeast = "southeast", southwest = "southwest",
+  }
+
+  local exitRows, exitErr = sqlite_query(conn, "SELECT fromuid, touid, dir FROM exits WHERE fromuid NOT IN ('*','**')")
+  if not exitRows then return nil, exitErr end
+
+  local created = 0
+  for _, ex in ipairs(exitRows) do
+    local fromId, toId = tonumber(ex.fromuid), tonumber(ex.touid)
+    local dir = ex.dir and tostring(ex.dir)
+    if fromId and toId and dir and dir ~= "" then
+      local std = dirMap[dir:lower()]
+      local ok = std and setExit(fromId, toId, std) or addSpecialExit(fromId, toId, dir)
+      if ok then created = created + 1 end
+    end
+  end
+
+  return { exits = created }
+end
+
+function mm.import.convert_sqlite_to_mudlet(source_path, target_path)
+  if not source_path or source_path == "" then
+    return false, "missing source sqlite path"
+  end
+
+  local okInspect, inspect = mm.import.inspect_sqlite(source_path)
+  if not okInspect then
+    return false, inspect
+  end
+
+  if not inspect.compatible then
+    return false, "schema mismatch. missing columns: " .. table.concat(inspect.missing or {}, ", ")
+  end
+
+  local env, conn, openErr = open_sqlite(inspect.path)
+  if not conn then
+    return false, openErr
+  end
+
+  local ok, result_or_err = pcall(function()
+    mm.note("Converting sqlite mapper DB -> Mudlet map: " .. inspect.path)
+    mm.note(string.format("Source has %d rooms, %d exits.", inspect.room_count, inspect.exit_count))
+
+    clear_mudlet_map()
+
+    local roomStats, roomErr = import_rooms(conn, inspect.room_columns)
+    if not roomStats then error("room import failed: " .. tostring(roomErr)) end
+
+    local exitStats, exitErr = import_exits(conn)
+    if not exitStats then error("exit import failed: " .. tostring(exitErr)) end
+
+    local saved
+    local final_target
+    if target_path and target_path ~= "" then
+      final_target = mm.resolve_native_mapper_db(target_path)
+      mm.state.native_mapper_db = target_path
+    else
+      final_target = getMudletHomeDir() .. "/mmapper_converted_map.dat"
+      mm.state.native_mapper_db = "mmapper_converted_map.dat"
+    end
+
+    saved = saveMap(final_target)
+    mm.note("Map saved to: " .. tostring(final_target))
+
+    if saved == false then
+      error("saveMap returned false")
+    end
+
+    return {
+      rooms = roomStats.rooms or 0,
+      areas = roomStats.areas or 0,
+      exits = exitStats.exits or 0,
+    }
+  end)
+
+  conn:close()
+  env:close()
+
+  if not ok then
+    return false, tostring(result_or_err)
+  end
+
+  local stats = result_or_err
+  mm.note(string.format("Conversion complete: %d rooms, %d exits, %d areas.", stats.rooms, stats.exits, stats.areas))
+  return true, stats
+end
+
+    ]]></Script>
+    <Script isActive="yes" isFolder="no" name="mm_gmcp"><![CDATA[
+mm = mm or {}
+
+local function sync_current_room(info)
+  local uid = tonumber(info and info.num)
+  if not uid then return end
+  if type(setPlayerRoom) ~= "function" then return end
+
+  local ok = pcall(setPlayerRoom, uid)
+  if not ok then return end
+
+  if mm.state.auto_locate and (not mm.runtime.located_once or mm.state.center_on_locate) and type(centerview) == "function" then
+    pcall(centerview, uid)
+  end
+
+  if not mm.runtime.located_once then
+    mm.runtime.located_once = true
+    mm.note("Mapper synchronized to room " .. tostring(uid) .. ".")
+  end
+end
+
+function mm.on_room_info()
+  if not (gmcp and gmcp.Room and gmcp.Room.Info) then return end
+  local info = gmcp.Room.Info
+
+  sync_current_room(info)
+
+  -- Room-note display is handled in mmapper/mm_gmcp.lua to avoid duplicate output
+  -- when both modular and package handlers are present.
+  if mm.state.minimap.show_room then
+    mm.minimap.push_line(string.format("[%s] %s", tostring(info.num or "?"), tostring(info.name or "")))
+  end
+  if mm.state.minimap.show_coords then
+    local x, y, z = info.x or "?", info.y or "?", info.z or "?"
+    mm.minimap.push_line(string.format("Coords: %s,%s,%s", tostring(x), tostring(y), tostring(z)))
+  end
+end
+
+function mm.on_room_exits()
+  if not (gmcp and gmcp.Room and gmcp.Room.Exits and mm.state.minimap.show_exits) then return end
+  local exits = {}
+  for dir, _ in pairs(gmcp.Room.Exits) do
+    table.insert(exits, dir)
+  end
+  table.sort(exits)
+  mm.minimap.push_line("Exits: " .. table.concat(exits, ", "))
+end
+
+function mm.on_map_ascii_line()
+  if not matches or not matches[2] then return end
+  mm.minimap.push_line(matches[2])
+end
+
+function mm.register_events()
+  if mm._events then return end
+  mm._events = {
+    registerAnonymousEventHandler("gmcp.Room.Info", "mm.on_room_info"),
+    registerAnonymousEventHandler("gmcp.Room.Exits", "mm.on_room_exits"),
+  }
+  mm._map_line_trigger = tempRegexTrigger("^([+|\\- .#@*<>~]+)$", "mm.on_map_ascii_line()")
+end
+
+    ]]></Script>
+    <Script isActive="yes" isFolder="no" name="mm_startup"><![CDATA[
+
+if mm and type(mm.register_aliases)=="function" and type(mm.register_events)=="function" and mm.minimap and type(mm.minimap.init)=="function" then
+  mm.register_aliases()
+  mm.register_events()
+  mm.minimap.init()
+
+  local loaded, err = mm.load_native_mapper_db()
+  if not loaded then
+    mm.warn("Native mapper DB was not auto-loaded: " .. tostring(err))
+  end
+
+  mm.note("MMapper initialized from package scripts.")
+else
+  cecho("<orange_red>[MMAPPER]<reset> Package init failed: module load order problem.
+")
+end
+
+    ]]></Script>
+  </ScriptGroup>
+</MudletPackage>

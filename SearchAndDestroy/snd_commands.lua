@@ -1,0 +1,2689 @@
+--[[
+    Search and Destroy - Commands Module
+    Mudlet Port
+    
+    Original MUSHclient plugin by Crowley
+    Ported to Mudlet
+    
+    This module contains all user command handlers (aliases)
+]]
+
+snd = snd or {}
+snd.commands = snd.commands or {}
+
+local function getScopedActivity()
+    if snd and snd.getActiveTab then
+        local tab = snd.getActiveTab()
+        if tab == "quest" or tab == "gq" or tab == "cp" then
+            return tab
+        end
+    end
+    if snd.targets and snd.targets.current and snd.targets.current.activity then
+        return snd.targets.current.activity
+    end
+    return nil
+end
+
+local function ensureQuickWhereScopes()
+    snd.nav = snd.nav or {}
+    snd.nav.quickWhere = snd.nav.quickWhere or {}
+    snd.nav.quickWhereByActivity = snd.nav.quickWhereByActivity or {}
+    for _, activity in ipairs({"quest", "gq", "cp"}) do
+        local slot = snd.nav.quickWhereByActivity[activity]
+        if type(slot) ~= "table" then
+            slot = {}
+            snd.nav.quickWhereByActivity[activity] = slot
+        end
+        slot.rooms = slot.rooms or {}
+        slot.index = tonumber(slot.index) or 1
+        slot.active = slot.active == true
+        slot.targetKey = tostring(slot.targetKey or "")
+    end
+end
+
+local function persistQuickWhereScope(activity)
+    ensureQuickWhereScopes()
+    if activity ~= "quest" and activity ~= "gq" and activity ~= "cp" then
+        return
+    end
+    local qw = snd.nav.quickWhere or {}
+    snd.nav.quickWhereByActivity[activity] = {
+        rooms = snd.utils.deepcopy(qw.rooms or {}),
+        index = tonumber(qw.index) or 1,
+        active = qw.active == true and type(qw.rooms) == "table" and #qw.rooms > 0,
+        targetKey = tostring(qw.targetKey or ""),
+    }
+end
+
+local function activateQuickWhereScope(activity)
+    ensureQuickWhereScopes()
+    local slot = snd.nav.quickWhereByActivity[activity]
+    if type(slot) ~= "table" then
+        return
+    end
+    snd.nav.quickWhere.rooms = snd.utils.deepcopy(slot.rooms or {})
+    snd.nav.quickWhere.index = tonumber(slot.index) or 1
+    snd.nav.quickWhere.active = slot.active == true and #snd.nav.quickWhere.rooms > 0
+    snd.nav.quickWhere.scope = activity
+    snd.nav.quickWhere.targetKey = tostring(slot.targetKey or "")
+    snd.nav.quickWhere.pendingMatches = snd.nav.quickWhere.pendingMatches or {}
+end
+
+local function clearNxOverride()
+    snd.nav = snd.nav or {}
+    snd.nav.nxOverride = nil
+end
+
+local function setScopedCurrent(activity, target)
+    if not snd.targets then return end
+    snd.targets.scoped = snd.targets.scoped or {quest = nil, gq = nil, cp = nil}
+    if activity == "quest" or activity == "gq" or activity == "cp" then
+        snd.targets.scoped[activity] = target and snd.utils.deepcopy(target) or nil
+    end
+end
+
+local function activateTabTarget(activity)
+    if not activity or not snd.targets then
+        return false
+    end
+
+    snd.targets.scoped = snd.targets.scoped or {quest = nil, gq = nil, cp = nil}
+    local scoped = snd.targets.scoped[activity]
+    if scoped then
+        snd.targets.current = snd.utils.deepcopy(scoped)
+        activateQuickWhereScope(activity)
+        return true
+    end
+
+    if activity == "quest" then
+        if snd.commands.selectQuestTarget then
+            snd.commands.selectQuestTarget()
+        end
+        return snd.targets.current and snd.targets.current.activity == "quest"
+    elseif activity == "cp" and snd.cp and snd.cp.getNextTarget then
+        local first = snd.cp.getNextTarget()
+        if first then
+            snd.cp.selectTarget(1)
+            return snd.targets.current and snd.targets.current.activity == "cp"
+        end
+    elseif activity == "gq" and snd.gq and snd.gq.getNextTarget then
+        local first = snd.gq.getNextTarget()
+        if first then
+            snd.gq.selectTarget(1)
+            return snd.targets.current and snd.targets.current.activity == "gq"
+        end
+    end
+
+    return false
+end
+
+-------------------------------------------------------------------------------
+-- Module Loading Helpers
+-------------------------------------------------------------------------------
+
+function snd.commands.ensureGuiLoaded()
+    if snd.gui and snd.gui.toggle then
+        return true
+    end
+
+    local guiPath = getMudletHomeDir() .. "/SearchAndDestroy/snd_gui.lua"
+    if io.exists(guiPath) then
+        dofile(guiPath)
+    else
+        snd.utils.errorNote("GUI module not found at: " .. guiPath)
+        snd.utils.errorNote("Run 'sndreload' after copying snd_gui.lua to that path.")
+        return false
+    end
+
+    if snd.gui and snd.gui.toggle then
+        return true
+    end
+
+    snd.utils.errorNote("GUI module failed to load. Try 'sndreload' for a full reload.")
+    return false
+end
+
+function snd.commands.showWindow()
+    if snd.commands.ensureGuiLoaded() then
+        snd.gui.show()
+    end
+end
+
+function snd.commands.sendGameCommand(cmd, echo)
+    if not cmd or cmd == "" then
+        return false
+    end
+
+    local noEcho = (echo == false)
+
+    -- Mudlet-native send(cmd, echo) is the most reliable route for aliases and
+    -- server command dispatch. Keep legacy Send*/SendNoEcho fallbacks for
+    -- compatibility with older helper layers.
+    if type(send) == "function" then
+        local ok = pcall(send, cmd, not noEcho)
+        if ok then return true end
+    end
+
+    if noEcho and type(SendNoEcho) == "function" then
+        local ok = pcall(SendNoEcho, cmd)
+        if ok then return true end
+    end
+
+    if type(Send) == "function" then
+        local ok = pcall(Send, cmd)
+        if ok then return true end
+    end
+
+    snd.utils.errorNote("Unable to send command to game: '" .. tostring(cmd) .. "'")
+    return false
+end
+
+-- Route all movement through command aliases so S&D stays mapper-independent.
+function snd.commands.gotoRoomViaAlias(roomId)
+    roomId = tonumber(roomId)
+    if not roomId or roomId <= 0 then
+        return false
+    end
+
+    local travelAlias = (snd.config and snd.config.speed == "walk") and "walkto" or "xrt"
+    local cmd = travelAlias .. " " .. tostring(roomId)
+    if type(extendedAlias) == "function" then
+        extendedAlias(cmd)
+    elseif type(expandAlias) == "function" then
+        expandAlias(cmd)
+    else
+        send(cmd, false)
+    end
+    return true
+end
+
+-------------------------------------------------------------------------------
+-- Main Command: snd
+-------------------------------------------------------------------------------
+
+function snd.commands.snd(args)
+    args = snd.utils.trim(args or "")
+    
+    if args == "" or args == "help" then
+        snd.commands.showHelp()
+    elseif args:match("^help%s+") then
+        snd.commands.xhelp(args:match("^help%s+(.+)$") or "")
+    elseif args == "version" then
+        snd.utils.infoNote(snd.fullVersion)
+    elseif args == "status" then
+        snd.commands.showStatus()
+    elseif args == "targets" then
+        snd.commands.showTargets()
+    elseif args == "stats" then
+        snd.commands.showStats()
+    elseif args == "save" then
+        snd.saveState()
+        snd.utils.infoNote("State saved.")
+    elseif args == "reload" then
+        snd.loadState()
+        snd.utils.infoNote("State reloaded.")
+    elseif args == "debug" then
+        if snd.debug and snd.debug.toggle then
+            snd.debug.toggle()
+        else
+            snd.config.debugMode = not snd.config.debugMode
+            snd.utils.infoNote("Debug mode: " .. (snd.config.debugMode and "ON" or "OFF"))
+        end
+    elseif args:match("^window%s+font%s+%d+$") then
+        local size = tonumber(args:match("^window%s+font%s+(%d+)$"))
+        if size and size >= 6 then
+            snd.config.window.fontSize = size
+            if snd.commands.ensureGuiLoaded() then
+                snd.gui.applyFontSize()
+            end
+            snd.saveState()
+            snd.utils.infoNote("Window font size set to " .. size)
+        else
+            snd.utils.infoNote("Usage: snd window font <number>")
+        end
+    elseif args == "window" then
+        if snd.commands.ensureGuiLoaded() then
+            snd.gui.toggle()
+        end
+    elseif args == "show" then
+        snd.commands.showWindow()
+    elseif args == "db" then
+        snd.commands.showDbInfo()
+    elseif args:match("^conwin") then
+        snd.commands.conwin(args:gsub("^conwin", "", 1))
+    elseif args:match("^channel") then
+        snd.commands.channel(args:gsub("^channel", "", 1))
+    elseif args:match("^history") then
+        snd.commands.history(args:gsub("^history", "", 1))
+    elseif args:match("^db%s+") then
+        local dbPath = args:match("^db%s+(.+)$")
+        if dbPath then
+            snd.db.setFile(dbPath)
+            snd.db.initialize()
+        end
+    else
+        snd.utils.infoNote("Unknown command: " .. args)
+        snd.commands.showHelp()
+    end
+end
+
+-------------------------------------------------------------------------------
+-- snd conwin - Consider Window Commands
+-------------------------------------------------------------------------------
+
+function snd.commands.conwin(args)
+    args = snd.utils.trim(args or "")
+    if not snd.conwin then
+        snd.utils.infoNote("ConWin module not loaded.")
+        return
+    end
+
+    if args == "" or args == "help" then
+        snd.commands.showConwinHelp()
+    elseif args == "on" then
+        snd.conwin.setEnabled(true)
+        snd.utils.infoNote("ConWin enabled.")
+    elseif args == "off" then
+        snd.conwin.setEnabled(false)
+        snd.utils.infoNote("ConWin disabled.")
+    elseif args == "toggle" then
+        snd.conwin.toggle()
+        snd.utils.infoNote("ConWin " .. ((snd.config.conwin and snd.config.conwin.enabled) and "enabled." or "disabled."))
+    elseif args == "refresh" then
+        snd.conwin.refresh()
+    elseif args == "clear" then
+        snd.conwin.clear("manual")
+    elseif args == "scan" or args == "consider" then
+        snd.conwin.setMode(args)
+        snd.utils.infoNote("ConWin room-action mode set to: " .. args)
+    elseif args:match("^mode%s+") then
+        local mode = snd.utils.trim(args:match("^mode%s+(.+)$") or "")
+        if snd.conwin.setMode(mode) then
+            snd.utils.infoNote("ConWin room-action mode set to: " .. mode)
+        else
+            snd.utils.infoNote("Usage: snd conwin mode <consider|scan|off>")
+        end
+    elseif args:match("^fontsize%s+%d+$") then
+        local n = tonumber(args:match("^fontsize%s+(%d+)$"))
+        if snd.conwin.setFontSize(n) then
+            snd.utils.infoNote("ConWin font size set to " .. tostring(n))
+        else
+            snd.utils.infoNote("Usage: snd conwin fontsize <6-24>")
+        end
+    elseif args:match("^killcommand%s+") then
+        local command = snd.utils.trim(args:match("^killcommand%s+(.+)$") or "")
+        if snd.conwin.setKillCommand and snd.conwin.setKillCommand(command) then
+            snd.utils.infoNote("ConWin kill command set to: " .. command)
+        else
+            snd.utils.infoNote("Usage: snd conwin killcommand <command>")
+        end
+    elseif args == "killcommand" then
+        local current = (snd.config and snd.config.conwin and snd.config.conwin.killCommand) or "kill"
+        snd.utils.infoNote("ConWin kill command: " .. tostring(current))
+    elseif args:match("^repopulate%s+%d+$") then
+        local count = tonumber(args:match("^repopulate%s+(%d+)$"))
+        if snd.conwin.setRepopulate and snd.conwin.setRepopulate(count) then
+            snd.utils.infoNote("ConWin repopulate threshold set to: " .. tostring(count) .. " kills (0=off)")
+        else
+            snd.utils.infoNote("Usage: snd conwin repopulate <0-999>")
+        end
+    elseif args:match("^focusid%s+") then
+        local mode = snd.utils.trim(args:match("^focusid%s+(.+)$") or ""):lower()
+        if snd.conwin.setFocusIdMode and snd.conwin.setFocusIdMode(mode) then
+            snd.utils.infoNote("ConWin focus-id mode set to: " .. mode)
+        else
+            snd.utils.infoNote("Usage: snd conwin focusid <strict|fallback>")
+        end
+    elseif args == "focusid" then
+        local focusMode = ((snd.config and snd.config.conwin and snd.config.conwin.strictFocusIdOnly) and "strict" or "fallback")
+        snd.utils.infoNote("ConWin focus-id mode: " .. focusMode)
+    elseif args:match("^aligntags%s+") then
+        local mode = snd.utils.trim(args:match("^aligntags%s+(.+)$") or ""):lower()
+        if snd.conwin.setAlignTagsEnabled and snd.conwin.setAlignTagsEnabled(mode) then
+            snd.utils.infoNote("ConWin alignment tags: " .. mode)
+        else
+            snd.utils.infoNote("Usage: snd conwin aligntags <on|off>")
+        end
+    elseif args == "aligntags" then
+        local alignState = (snd.config and snd.config.conwin and snd.config.conwin.alignTags == false) and "off" or "on"
+        snd.utils.infoNote("ConWin alignment tags: " .. alignState)
+    else
+        snd.utils.infoNote("Unknown conwin command: " .. args)
+        snd.commands.showConwinHelp()
+    end
+end
+
+-------------------------------------------------------------------------------
+-- xcp - Select Target
+-------------------------------------------------------------------------------
+
+function snd.commands.xcp(args)
+    args = snd.utils.trim(args or "")
+    
+    if args == "" then
+        -- Show current target and list
+        snd.commands.showTargets()
+        return
+    end
+    
+    local index = tonumber(args)
+    if not index then
+        snd.utils.infoNote("Usage: xcp <number>")
+        return
+    end
+    
+    local scopedActivity = getScopedActivity()
+
+    if scopedActivity == "quest" then
+        if index ~= 1 then
+            snd.utils.infoNote("Quest tab has a single target (use xcp 1)")
+            return
+        end
+        clearNxOverride()
+        snd.commands.selectQuestTarget()
+        return
+    end
+
+    -- Prefer active tab context first, then fallback
+    local success = false
+
+    if scopedActivity == "cp" and snd.campaign.active then
+        success = snd.cp.selectTarget(index)
+    elseif scopedActivity == "gq" and snd.gquest.active then
+        success = snd.gq.selectTarget(index)
+    end
+
+    if not success and snd.campaign.active then
+        success = snd.cp.selectTarget(index)
+    end
+
+    if not success and snd.gquest.active then
+        success = snd.gq.selectTarget(index)
+    end
+    
+    if success then
+        clearNxOverride()
+    end
+
+    if not success then
+        snd.utils.infoNote("No target at index " .. index)
+    end
+end
+
+function snd.commands.selectQuickWhereRoom(index, activity)
+    local roomIndex = tonumber(index)
+    if not roomIndex then
+        snd.utils.infoNote("Invalid room index: " .. tostring(index))
+        return false
+    end
+
+    local scope = tostring(activity or ""):lower()
+    if scope ~= "quest" and scope ~= "gq" and scope ~= "cp" then
+        scope = getScopedActivity() or "quest"
+    end
+
+    if scope and scope ~= "" then
+        activateQuickWhereScope(scope)
+        if activateTabTarget(scope) and snd.setActiveTab then
+            snd.setActiveTab(scope, {save = true, refresh = false})
+        end
+    end
+
+    local quickWhere = snd.nav and snd.nav.quickWhere or nil
+    if not quickWhere or not quickWhere.rooms or #quickWhere.rooms == 0 then
+        snd.utils.infoNote("No room list available for " .. tostring(scope) .. " target")
+        return false
+    end
+
+    local roomId = tonumber(quickWhere.rooms[roomIndex])
+    if not roomId or roomId <= 0 then
+        snd.utils.infoNote("No room at index " .. tostring(roomIndex))
+        return false
+    end
+
+    quickWhere.index = roomIndex
+    persistQuickWhereScope(scope or quickWhere.scope)
+
+    if snd.targets and snd.targets.current then
+        snd.targets.current.roomId = roomId
+    end
+
+    snd.utils.infoNote("Going to room " .. tostring(roomId))
+    snd.commands.gotoRoomViaAlias(roomId)
+    return true
+end
+
+-------------------------------------------------------------------------------
+-- nx - Next Target / Go to Target
+-------------------------------------------------------------------------------
+
+function snd.commands.buildTargetKeyFromEntry(target)
+    if not target then return "" end
+    return table.concat({
+        tostring(target.activity or ""),
+        tostring(target.mob or ""),
+        tostring(target.roomName or ""),
+        tostring(target.arid or target.loc or ""),
+    }, "|")
+end
+
+function snd.commands.buildTargetKeyFromCurrent(target)
+    if not target then return "" end
+    return table.concat({
+        tostring(target.activity or ""),
+        tostring(target.name or ""),
+        tostring(target.roomName or ""),
+        tostring(target.area or ""),
+    }, "|")
+end
+
+-- Quick-where lists should stick to the selected target identity only.
+-- Room fields are intentionally excluded so moving between matched rooms does
+-- not invalidate the active quick-where cycle.
+function snd.commands.buildQuickWhereTargetKeyFromCurrent(target)
+    if not target then return "" end
+    return table.concat({
+        tostring(target.activity or ""),
+        tostring(target.name or ""),
+        tostring(target.area or ""),
+    }, "|")
+end
+
+local function targetMatchesCurrent(entry, current)
+    if not entry or not current then return false end
+    if entry.activity ~= current.activity then return false end
+    if entry.mob ~= current.name then return false end
+    if current.roomId and current.roomId ~= "" then
+        return tostring(entry.rmid) == tostring(current.roomId)
+    end
+    if current.roomName and current.roomName ~= "" then
+        return entry.roomName == current.roomName
+    end
+    return true
+end
+
+local function getNxTargets()
+    local targets = {}
+    for _, t in ipairs(snd.targets.list) do
+        if t.activity ~= "quest" and not t.dead then
+            table.insert(targets, t)
+        end
+    end
+    return targets
+end
+
+local function selectTargetEntry(target)
+    if not target then return false end
+
+    snd.setTarget({
+        keyword = target.keyword,
+        name = target.mob,
+        roomName = target.roomName or "",
+        roomId = target.rmid,
+        area = target.arid or target.loc,
+        index = target.index,
+        activity = target.activity,
+    })
+    snd.utils.infoNote("Target: " .. target.mob)
+    if target.roomName == nil or target.roomName == "" then
+        if target.activity == "cp" or target.activity == "gq" then
+            local results = snd.mapper.searchMobLocations(target.mob, target.arid)
+            if not results or #results == 0 then
+                local keyword = target.keyword or snd.utils.findKeyword(target.mob)
+                if keyword and keyword ~= "" then
+                    snd.commands.qw(keyword)
+                end
+            end
+        elseif target.keyword then
+            snd.commands.qw(target.keyword)
+        end
+    end
+    return true
+end
+
+function snd.commands.nx()
+    local current = snd.targets.current
+    local nxOverride = snd.nav and snd.nav.nxOverride or nil
+    local useAdhocQuickWhere = nxOverride and nxOverride.mode == "adhoc_qw"
+
+    local scopedActivity = getScopedActivity()
+    if not useAdhocQuickWhere
+        and scopedActivity
+        and (not current or current.activity ~= scopedActivity)
+    then
+        activateTabTarget(scopedActivity)
+    end
+
+    current = snd.targets.current
+
+    if not current then
+        snd.utils.infoNote("No target selected. Use xcp to select a target first")
+        return
+    end
+
+    local currentKey = snd.commands.buildTargetKeyFromCurrent(current)
+    if not snd.nav.nxState or snd.nav.nxState.targetKey ~= currentKey then
+        snd.nav.nxState = {
+            targetKey = currentKey,
+            arrived = false,
+        }
+        if useAdhocQuickWhere then
+            local qwRooms = snd.nav and snd.nav.quickWhere and snd.nav.quickWhere.rooms or nil
+            if qwRooms and #qwRooms > 0 then
+                snd.nav.nxState.arrived = true
+            else
+                snd.commands.gotoTarget()
+                return
+            end
+        else
+            snd.commands.gotoTarget()
+            return
+        end
+    end
+
+    if not snd.nav.nxState.arrived then
+        local targetRoom = current.roomId
+        local currentRoom = snd.room and snd.room.current and snd.room.current.rmid or nil
+        if useAdhocQuickWhere and (not targetRoom or tostring(targetRoom) == "") then
+            local qwRooms = snd.nav and snd.nav.quickWhere and snd.nav.quickWhere.rooms or nil
+            if qwRooms and #qwRooms > 0 then
+                snd.nav.nxState.arrived = true
+            end
+        end
+        if snd.nav.nxState.arrived then
+            -- ad-hoc quick-where overrides do not require a concrete target room;
+            -- once a room cycle exists we can proceed directly to cycling logic.
+        elseif targetRoom and currentRoom and tostring(targetRoom) == tostring(currentRoom) then
+            snd.nav.nxState.arrived = true
+        else
+            snd.commands.gotoTarget()
+            return
+        end
+    end
+
+    local quickWhere = snd.nav.quickWhere
+    if quickWhere and quickWhere.active and quickWhere.rooms and #quickWhere.rooms > 0 then
+        if not useAdhocQuickWhere then
+            local quickWhereKey = quickWhere.targetKey or ""
+            local currentQuickWhereKey = snd.commands.buildQuickWhereTargetKeyFromCurrent(current)
+            if quickWhereKey ~= "" and currentQuickWhereKey ~= "" and quickWhereKey ~= currentQuickWhereKey then
+                quickWhere = nil
+            end
+        end
+    end
+
+    -- Campaign/GQ room searches populate snd.nav.gotoList for the displayed
+    -- XCP table. If quick-where state was not built (or was stale), use this
+    -- list as a fallback cycle source so nx can still advance through rooms.
+    local currentQuickWhereKey = snd.commands.buildQuickWhereTargetKeyFromCurrent(current)
+    local gotoListKey = snd.nav and snd.nav.gotoListTargetKey or ""
+    local gotoListMatchesCurrent = (gotoListKey ~= "" and currentQuickWhereKey ~= "" and gotoListKey == currentQuickWhereKey)
+
+    if (not quickWhere or not quickWhere.active or not quickWhere.rooms or #quickWhere.rooms == 0)
+        and snd.nav.gotoList and gotoListMatchesCurrent
+    then
+        local fallbackRooms = {}
+        local seen = {}
+
+        for i = 1, #snd.nav.gotoList do
+            local entry = snd.nav.gotoList[i]
+            if entry and entry.type == "room" then
+                local roomId = tonumber(entry.id) or -1
+                if roomId > 0 and not seen[roomId] then
+                    seen[roomId] = true
+                    table.insert(fallbackRooms, roomId)
+                end
+            end
+        end
+
+        if #fallbackRooms > 0 and snd.nav.quickWhere then
+            snd.nav.quickWhere.rooms = fallbackRooms
+            snd.nav.quickWhere.index = 1
+            snd.nav.quickWhere.active = true
+            snd.nav.quickWhere.processed = true
+            snd.nav.quickWhere.pendingMatches = {}
+            snd.nav.quickWhere.scope = current and current.activity or snd.nav.quickWhere.scope
+            snd.nav.quickWhere.targetKey = currentQuickWhereKey
+            persistQuickWhereScope(snd.nav.quickWhere.scope)
+            quickWhere = snd.nav.quickWhere
+            snd.utils.debugNote("NX: seeded cycle list from current XCP results")
+        end
+    end
+
+    if quickWhere and quickWhere.active and quickWhere.rooms and #quickWhere.rooms > 0 then
+        local currentRoom = snd.room and snd.room.current and snd.room.current.rmid or nil
+        local targetRoom = current and current.roomId or nil
+        local foundIndex = nil
+
+        -- Prioritize the room we are currently standing in; the selected target
+        -- can still point at an earlier room from the quick-where result set.
+        local function findRoomIndex(roomId)
+            if not roomId then
+                return nil
+            end
+            for i, candidate in ipairs(quickWhere.rooms) do
+                if tostring(candidate) == tostring(roomId) then
+                    return i
+                end
+            end
+            return nil
+        end
+
+        foundIndex = findRoomIndex(currentRoom) or findRoomIndex(targetRoom)
+
+        local nextIndex = nil
+        if foundIndex then
+            nextIndex = foundIndex < #quickWhere.rooms and (foundIndex + 1) or 1
+        else
+            nextIndex = quickWhere.index or 1
+        end
+        quickWhere.index = nextIndex
+        persistQuickWhereScope(quickWhere.scope or (current and current.activity))
+
+        local nextRoomId = quickWhere.rooms[nextIndex]
+        if nextRoomId then
+            snd.utils.infoNote("Going to room " .. nextRoomId)
+            snd.commands.gotoRoomViaAlias(nextRoomId)
+            return
+        end
+    end
+
+    -- No active quick-where room list for this target: keep the selected target
+    -- and simply retry going to its current mapped room.
+    snd.commands.gotoTarget()
+end
+
+function snd.commands.handleAlreadyInRoom(roomId)
+    local current = snd.targets.current
+    if not current then
+        return false
+    end
+
+    local cycleRooms = {}
+    local seen = {}
+
+    local quickWhere = snd.nav.quickWhere
+    if quickWhere and quickWhere.active and quickWhere.rooms and #quickWhere.rooms > 0 then
+        for _, candidate in ipairs(quickWhere.rooms) do
+            local id = tonumber(candidate) or -1
+            if id > 0 and not seen[id] then
+                seen[id] = true
+                table.insert(cycleRooms, id)
+            end
+        end
+    end
+
+    if #cycleRooms == 0 and snd.nav.gotoList then
+        for i = 1, #snd.nav.gotoList do
+            local entry = snd.nav.gotoList[i]
+            if entry and entry.type == "room" then
+                local id = tonumber(entry.id) or -1
+                if id > 0 and not seen[id] then
+                    seen[id] = true
+                    table.insert(cycleRooms, id)
+                end
+            end
+        end
+    end
+
+    if #cycleRooms <= 1 then
+        return false
+    end
+
+    local currentId = tonumber(roomId) or tonumber(snd.room and snd.room.current and snd.room.current.rmid)
+    if not currentId then
+        return false
+    end
+
+    local foundIndex = nil
+    for i, candidate in ipairs(cycleRooms) do
+        if tonumber(candidate) == currentId then
+            foundIndex = i
+            break
+        end
+    end
+
+    if not foundIndex then
+        return false
+    end
+
+    local nextIndex = foundIndex < #cycleRooms and (foundIndex + 1) or 1
+    local nextRoomId = cycleRooms[nextIndex]
+    if not nextRoomId or tonumber(nextRoomId) == currentId then
+        return false
+    end
+
+    snd.utils.infoNote("Already in room " .. tostring(currentId) .. ", moving to room " .. tostring(nextRoomId))
+    snd.commands.gotoRoomViaAlias(nextRoomId)
+    return true
+end
+
+-------------------------------------------------------------------------------
+-- qw - Quick Where
+-------------------------------------------------------------------------------
+
+function snd.commands.qw(args)
+    args = snd.utils.trim(args or "")
+
+    local keyword = args
+    local rawKeyword = keyword
+    local startIndex = 1
+
+    local prefixedIndex, prefixedKeyword = keyword:match("^(%d+)%.(.+)$")
+    if prefixedIndex and prefixedKeyword then
+        startIndex = tonumber(prefixedIndex) or 1
+        keyword = snd.utils.trim(prefixedKeyword)
+    end
+
+    -- Support legacy placeholders that refer to the currently tracked target.
+    -- Players commonly use `qw target`, which should behave like `qw`.
+    local lowered = keyword:lower()
+    if lowered == "target" or lowered == "current" then
+        keyword = ""
+    elseif lowered == "cp_target" then
+        for _, target in ipairs(snd.targets.list or {}) do
+            if target.activity == "cp" and not target.dead and target.keyword and target.keyword ~= "" then
+                keyword = target.keyword
+                break
+            end
+        end
+    elseif lowered == "gq_target" then
+        for _, target in ipairs(snd.targets.list or {}) do
+            if target.activity == "gq" and not target.dead and target.keyword and target.keyword ~= "" then
+                keyword = target.keyword
+                break
+            end
+        end
+    elseif lowered == "quest_target" and snd.quest and snd.quest.target then
+        keyword = snd.quest.target.keyword or ""
+    end
+
+    local scopedActivity = getScopedActivity()
+    local isAdhocQw = rawKeyword ~= ""
+        and lowered ~= "target"
+        and lowered ~= "current"
+        and lowered ~= "cp_target"
+        and lowered ~= "gq_target"
+        and lowered ~= "quest_target"
+
+    -- If no args, use current target in active tab scope
+    if keyword == "" then
+        if scopedActivity and (not snd.targets.current or snd.targets.current.activity ~= scopedActivity) then
+            activateTabTarget(scopedActivity)
+        end
+        if snd.targets.current and snd.targets.current.keyword then
+            keyword = snd.targets.current.keyword
+        elseif snd.quest and snd.quest.active and snd.quest.target and snd.quest.target.keyword and snd.quest.target.keyword ~= "" then
+            keyword = snd.quest.target.keyword
+        else
+            snd.utils.infoNote("No target selected. Usage: qw <keyword>")
+            return
+        end
+    end
+
+    snd.triggers.enableQuickWhereTriggers()
+    snd.nav = snd.nav or {}
+    if isAdhocQw then
+        snd.nav.nxOverride = {
+            mode = "adhoc_qw",
+            keyword = keyword,
+        }
+    else
+        clearNxOverride()
+    end
+    if snd.nav.quickWhere then
+        snd.nav.quickWhere.lastMatch = nil
+        snd.nav.quickWhere.pendingMatches = {}
+        snd.nav.quickWhere.processed = false
+        snd.nav.quickWhere.requestedKeyword = keyword
+        snd.nav.quickWhere.lookupKeyword = keyword
+        snd.nav.quickWhere.index = startIndex
+        snd.nav.quickWhere.exact = false
+        snd.nav.quickWhere.scope = scopedActivity or (snd.targets.current and snd.targets.current.activity) or "unknown"
+        if snd.nav.quickWhere.processTimer then
+            killTimer(snd.nav.quickWhere.processTimer)
+            snd.nav.quickWhere.processTimer = nil
+        end
+    end
+
+    if startIndex > 1 then
+        local cmd = string.format("where %d.%s", startIndex, keyword)
+        snd.utils.qwDebugNote("QW DEBUG: start index=" .. tostring(startIndex) .. ", keyword='" .. keyword .. "', cmd='" .. cmd .. "'")
+        snd.commands.sendGameCommand(cmd, false)
+    else
+        local cmd = "where " .. keyword
+        snd.utils.qwDebugNote("QW DEBUG: start index=1, keyword='" .. keyword .. "', cmd='" .. cmd .. "'")
+        snd.commands.sendGameCommand(cmd, false)
+    end
+
+    tempTimer(5, function()
+        if snd.nav.quickWhere and snd.nav.quickWhere.processed == false then
+            snd.triggers.disableQuickWhereTriggers()
+        end
+    end)
+end
+
+local function resolveQuickWhereAreaKey()
+    local areaKey = snd.room and snd.room.current and snd.utils.trim(snd.room.current.arid or "") or ""
+    if areaKey ~= "" then
+        return areaKey
+    end
+
+    local roomId = snd.room and snd.room.current and tonumber(snd.room.current.rmid)
+    if roomId and roomId > 0 and snd.mapper and snd.mapper.getRoomInfo then
+        local info = snd.mapper.getRoomInfo(roomId)
+        local mappedArea = info and snd.utils.trim(info.area or "") or ""
+        if mappedArea ~= "" then
+            return mappedArea
+        end
+    end
+
+    return ""
+end
+
+function snd.commands.processQuickWhereResult()
+    local quickWhere = snd.nav.quickWhere
+    if not quickWhere then
+        return
+    end
+
+    local matchesToProcess = {}
+    if quickWhere.pendingMatches and #quickWhere.pendingMatches > 0 then
+        matchesToProcess = quickWhere.pendingMatches
+    elseif quickWhere.lastMatch and quickWhere.lastMatch.room then
+        matchesToProcess = {quickWhere.lastMatch}
+    end
+
+    if #matchesToProcess == 0 then
+        snd.utils.qwDebugNote("QW DEBUG: process result received no captured matches")
+        quickWhere.processed = true
+        snd.triggers.disableQuickWhereTriggers()
+        return
+    end
+
+    local lastMatch = matchesToProcess[#matchesToProcess]
+
+    snd.targets = snd.targets or {}
+    snd.targets.current = snd.targets.current or {}
+    snd.targets.current.name = lastMatch.mob or snd.targets.current.name
+    snd.targets.current.keyword = snd.utils.findKeyword(lastMatch.mob or snd.targets.current.name or "")
+    snd.targets.current.matchedMobName = lastMatch.mob or snd.targets.current.matchedMobName
+    snd.targets.current.activity = "qw"
+    snd.targets.current.roomName = lastMatch.room or snd.targets.current.roomName
+
+    local areaKey = resolveQuickWhereAreaKey()
+    snd.targets.current.area = areaKey
+    if areaKey ~= "" then
+        snd.utils.qwDebugNote("QW DEBUG: restricting room lookup to current area '" .. tostring(areaKey) .. "'")
+    else
+        snd.utils.qwDebugNote("QW DEBUG: current area unknown, using global room lookup")
+    end
+
+    local roomRows = {}
+    for _, matchEntry in ipairs(matchesToProcess) do
+        local roomResults = snd.mapper.searchRoomsExact(matchEntry.room, areaKey, nil, { silent = true })
+        for _, roomEntry in ipairs(roomResults) do
+            local roomArea = tostring(roomEntry.arid or "")
+            if areaKey == "" or roomArea == areaKey then
+                table.insert(roomRows, {
+                    uid = roomEntry.rmid,
+                    name = roomEntry.name,
+                    area = roomEntry.arid,
+                })
+            end
+        end
+    end
+
+    local results = snd.mapper.searchRoomsRows(roomRows, nil, { silent = true })
+
+    local seenRoomIds = {}
+    local dedupedResults = {}
+    for _, entry in ipairs(results) do
+        local roomId = tonumber(entry.rmid) or -1
+        -- Only dedupe by concrete room id.
+        -- Do not collapse unknown-id rows by name/area, because distinct rooms
+        -- can legitimately share the same name.
+        if roomId > 0 then
+            if not seenRoomIds[roomId] then
+                seenRoomIds[roomId] = true
+                table.insert(dedupedResults, entry)
+            end
+        else
+            table.insert(dedupedResults, entry)
+        end
+    end
+    results = dedupedResults
+
+    local chanceMob = (lastMatch and lastMatch.mob) or (snd.targets.current and snd.targets.current.name) or nil
+    local roomidList = {}
+    for _, entry in ipairs(results) do
+        local roomId = tonumber(entry.rmid)
+        if roomId and roomId > 0 then
+            table.insert(roomidList, tostring(roomId))
+        end
+    end
+
+    local countByRoom = {}
+    local killsByRoom = {}
+    local sum = 0
+    local function loadRoomStats(mobName)
+        if not mobName or mobName == "" or #roomidList == 0 then
+            return {}
+        end
+
+        local sql = string.format(
+            "SELECT roomid, seen_count, kill_count FROM mobs WHERE lower(mob) = lower(%s) AND roomid in (%s);",
+            snd.db.escape(mobName),
+            table.concat(roomidList, ",")
+        )
+        return snd.db.query(sql) or {}
+    end
+
+    local seenRows = loadRoomStats(chanceMob)
+    if #seenRows == 0 and chanceMob and chanceMob:find("%-") then
+        seenRows = loadRoomStats(chanceMob:gsub("%-", " "))
+    end
+
+    for _, row in ipairs(seenRows) do
+        local roomId = tonumber(row.roomid)
+        local seen = tonumber(row.seen_count) or 0
+        local kills = tonumber(row.kill_count) or 0
+        if roomId then
+            countByRoom[roomId] = seen
+            killsByRoom[roomId] = kills
+            sum = sum + seen
+        end
+    end
+
+    for _, entry in ipairs(results) do
+        local roomId = tonumber(entry.rmid) or -1
+        entry.seen_count = countByRoom[roomId] or 0
+        entry.kill_count = killsByRoom[roomId] or 0
+        if sum > 0 then
+            entry.percentage = entry.seen_count / sum
+        else
+            entry.percentage = 0
+        end
+    end
+
+    table.sort(results, function(a, b)
+        if (a.seen_count or 0) > (b.seen_count or 0) then
+            return true
+        elseif (a.seen_count or 0) < (b.seen_count or 0) then
+            return false
+        end
+
+        if (a.kill_count or 0) > (b.kill_count or 0) then
+            return true
+        elseif (a.kill_count or 0) < (b.kill_count or 0) then
+            return false
+        end
+
+        return (a.rmid or 0) < (b.rmid or 0)
+    end)
+
+    local firstRoomId = nil
+    local quickWhereRooms = {}
+    if results and #results > 0 then
+        snd.utils.qwDebugNote("QW DEBUG: mapped " .. tostring(#results) .. " room candidates from where result")
+        snd.mapper.searchRoomsResults(results)
+        for _, entry in ipairs(results) do
+            local roomId = tonumber(entry.rmid) or -1
+            if roomId > 0 then
+                if not firstRoomId then
+                    firstRoomId = roomId
+                end
+                table.insert(quickWhereRooms, roomId)
+            end
+        end
+    end
+
+    if firstRoomId and snd.targets and snd.targets.current then
+        snd.targets.current.roomId = firstRoomId
+        snd.targets.current.roomName = lastMatch.room
+    end
+
+    if snd.nav.quickWhere then
+        snd.nav.quickWhere.rooms = quickWhereRooms
+        snd.nav.quickWhere.index = 1
+        snd.nav.quickWhere.active = #quickWhereRooms > 0
+        if snd.targets and snd.targets.current then
+            snd.nav.quickWhere.targetKey = snd.commands.buildQuickWhereTargetKeyFromCurrent(snd.targets.current)
+        else
+            snd.nav.quickWhere.targetKey = nil
+        end
+        snd.nav.quickWhere.processed = true
+        snd.nav.quickWhere.pendingMatches = {}
+        persistQuickWhereScope(snd.nav.quickWhere.scope)
+    end
+
+    snd.triggers.disableQuickWhereTriggers()
+
+end
+
+-------------------------------------------------------------------------------
+-- ht - Hunt Trick
+-------------------------------------------------------------------------------
+
+function snd.commands.ht(args)
+    args = snd.utils.trim(args or "")
+
+    local lowered = args:lower()
+    if lowered == "stop" or lowered == "abort" or lowered == "a" or lowered == "0" then
+        snd.commands.stopHunt()
+        return
+    end
+
+    local startIndex = 1
+    local keyword = args
+    local prefixedIndex, prefixedKeyword = keyword:match("^(%d+)%.(.+)$")
+    if prefixedIndex and prefixedKeyword then
+        startIndex = tonumber(prefixedIndex) or 1
+        keyword = snd.utils.trim(prefixedKeyword)
+    end
+
+    -- If no args, use current target
+    if keyword == "" then
+        if snd.targets.current and snd.targets.current.keyword then
+            keyword = snd.targets.current.keyword
+        else
+            snd.utils.infoNote("No target selected. Usage: ht <keyword>")
+            return
+        end
+    end
+
+    -- Enable hunt triggers
+    snd.triggers.enableGroup("Hunt")
+
+    -- Initialize hunt trick state
+    snd.nav.huntTrick = {
+        keyword = keyword,
+        index = startIndex,
+        firstTarget = true,
+        active = true,
+    }
+
+    if startIndex > 1 then
+        send(string.format("hunt %d.%s", startIndex, keyword), false)
+    else
+        send("hunt " .. keyword, false)
+    end
+end
+
+function snd.commands.huntTrickContinue()
+    if not snd.nav or not snd.nav.huntTrick or not snd.nav.huntTrick.active then
+        return
+    end
+
+    snd.nav.huntTrick.index = (tonumber(snd.nav.huntTrick.index) or 1) + 1
+    snd.nav.huntTrick.firstTarget = false
+
+    local ix = snd.nav.huntTrick.index
+    local keyword = snd.nav.huntTrick.keyword
+    if not keyword or keyword == "" then
+        snd.utils.debugNote("You no longer have a target. Stopping hunt trick.")
+        snd.commands.stopHunt()
+        return
+    end
+
+    send(string.format("hunt %d.%s", ix, keyword), false)
+end
+
+function snd.commands.huntTrickComplete()
+    if not snd.nav or not snd.nav.huntTrick then
+        return
+    end
+
+    local ht = snd.nav.huntTrick
+    local ix = tonumber(ht.index) or 1
+    local keyword = ht.keyword
+
+    snd.commands.stopHunt(true)
+
+    if keyword and keyword ~= "" then
+        if ix > 1 then
+            snd.commands.qw(string.format("%d.%s", ix, keyword))
+        else
+            snd.commands.qw(keyword)
+        end
+    else
+        snd.utils.debugNote("You no longer have a target. Stopping hunt trick.")
+    end
+end
+
+function snd.commands.huntTrickFail()
+    local firstTarget = snd.nav and snd.nav.huntTrick and snd.nav.huntTrick.firstTarget
+    snd.commands.stopHunt(true)
+
+    if firstTarget then
+        snd.utils.infoNote("Hunt trick failed. Attempting quick where.")
+        snd.commands.qw("")
+    else
+        snd.utils.infoNote("Hunt trick failed.")
+    end
+end
+
+--- Stop hunt trick
+function snd.commands.stopHunt(silent)
+    if snd.nav.huntTrick then
+        snd.nav.huntTrick.active = false
+        snd.nav.huntTrick.index = 1
+        snd.nav.huntTrick.firstTarget = true
+    end
+    snd.triggers.disableGroup("Hunt")
+    if not silent then
+        snd.utils.infoNote("Hunt stopped")
+    end
+end
+
+-------------------------------------------------------------------------------
+-- xkill - Kill Current Target
+-------------------------------------------------------------------------------
+
+--- Kill current target using configured kill command
+function snd.commands.xkill()
+    local scopedActivity = getScopedActivity()
+    if scopedActivity and (not snd.targets.current or snd.targets.current.activity ~= scopedActivity) then
+        activateTabTarget(scopedActivity)
+    end
+
+    -- Check if we have a current target
+    if not snd.targets.current then
+        snd.utils.infoNote("No target selected. Use xcp to select a target first.")
+        return
+    end
+    
+    local keyword = snd.targets.current.keyword or snd.targets.current.matchedMobName
+    if not keyword or keyword == "" then
+        keyword = snd.targets.current.name
+        if keyword then
+            -- Extract last word as keyword fallback
+            keyword = snd.utils.findKeyword(keyword)
+        end
+    end
+    
+    if not keyword or keyword == "" then
+        snd.utils.infoNote("No keyword for current target")
+        return
+    end
+    
+    -- Get the kill command (default: "kill")
+    local killCmd = snd.config.killCommand or "kill"
+    
+    -- Send the kill command
+    local fullCmd = killCmd .. " " .. keyword
+    snd.utils.debugNote("xkill: " .. fullCmd)
+    if snd.conwin and snd.conwin.noteAttackByKeyword then
+        snd.conwin.noteAttackByKeyword(keyword, 1)
+    end
+    send(fullCmd, false)
+end
+
+-------------------------------------------------------------------------------
+-- xcmd - Set Kill Command
+-------------------------------------------------------------------------------
+
+--- Set the kill command used by xkill
+-- @param args The command to use (e.g., "cast 'lightning bolt'")
+function snd.commands.xcmd(args)
+    args = snd.utils.trim(args or "")
+    
+    if args == "" then
+        -- Show current command
+        cecho("\n<cyan>Current xkill command:<reset> " .. (snd.config.killCommand or "kill") .. "\n")
+        cecho("<dim_gray>Usage: xcmd <command><reset>\n")
+        cecho("<dim_gray>Examples:<reset>\n")
+        cecho("  <yellow>xcmd kill<reset>                 - Use 'kill <target>'\n")
+        cecho("  <yellow>xcmd cast 'lightning bolt'<reset> - Use 'cast 'lightning bolt' <target>'\n")
+        cecho("  <yellow>xcmd backstab<reset>             - Use 'backstab <target>'\n")
+        return
+    end
+    
+    -- Set the new kill command
+    snd.config.killCommand = args
+    snd.utils.infoNote("Kill command set to: " .. args)
+    
+    -- Save config
+    if snd.saveState then
+        snd.saveState()
+    end
+end
+
+-------------------------------------------------------------------------------
+-- qref - Quest Refresh/Status
+-------------------------------------------------------------------------------
+
+--- Show quest status and refresh target
+function snd.commands.qref()
+    -- Request fresh quest data from server
+    sendGMCP("request quest")
+    
+    -- Show current quest info
+    tempTimer(0.2, function()
+        if snd.quest.active and snd.quest.target.mob ~= "" then
+            cecho("\n<magenta>Quest Target:<reset> " .. snd.quest.target.mob .. "\n")
+            if snd.quest.target.area ~= "" then
+                cecho("<dim_gray>Area:<reset> " .. snd.quest.target.area .. "\n")
+            end
+            if snd.quest.target.room ~= "" then
+                cecho("<dim_gray>Room:<reset> " .. snd.quest.target.room .. "\n")
+            end
+            if snd.quest.target.keyword ~= "" then
+                cecho("<dim_gray>Keyword:<reset> " .. snd.quest.target.keyword .. "\n")
+            end
+            if snd.quest.timer and snd.quest.timer > 0 then
+                cecho("<dim_gray>Time:<reset> " .. snd.quest.timer .. " minutes\n")
+            end
+            if snd.quest.target.status == "killed" then
+                cecho("<green>Status: Target killed - return to questor!<reset>\n")
+            end
+            
+            -- Make sure quest is in target list
+            snd.gmcp.addQuestToTargetList()
+        else
+            cecho("\n<yellow>No active quest.<reset>\n")
+            if snd.quest.nextQuestTime and snd.quest.nextQuestTime > 0 then
+                local mins, cooldownText = snd.quest.getNextQuestStatus()
+                if mins > 0 then
+                    local waitText = cooldownText ~= "" and cooldownText
+                        or string.format("Next quest in: %d minutes", mins)
+                    cecho("<dim_gray>" .. waitText .. "<reset>\n")
+                end
+            end
+        end
+    end)
+end
+
+-- Backward-compatible callable function name (no alias registration).
+function snd.commands.qr()
+    snd.commands.qref()
+end
+
+-------------------------------------------------------------------------------
+-- goto - Navigate to Target
+-------------------------------------------------------------------------------
+
+function snd.commands.gotoTarget()
+    local scopedActivity = getScopedActivity()
+    if scopedActivity and (not snd.targets.current or snd.targets.current.activity ~= scopedActivity) then
+        activateTabTarget(scopedActivity)
+    end
+
+    if not snd.targets.current then
+        snd.utils.infoNote("No target selected")
+        return
+    end
+    
+    local target = snd.targets.current
+    if target.roomId and target.roomId ~= "" then
+        snd.utils.infoNote("Going to room " .. target.roomId)
+        snd.commands.gotoRoomViaAlias(target.roomId)
+        return
+    end
+
+    if target.roomName and target.roomName ~= "" then
+        snd.utils.infoNote("Finding rooms for " .. target.roomName)
+        local results = snd.mapper.searchRoomsExact(target.roomName, target.area or target.arid, target.name, {
+            activity = target.activity,
+            levelTaken = (target.activity == "cp" and snd.campaign.levelTaken)
+                or (target.activity == "gq" and snd.gquest.effectiveLevel)
+                or (snd.char and snd.char.level),
+        })
+        local firstMatch = results and results[1] and tonumber(results[1].rmid) or nil
+
+        -- Prime nx quick-where cycling from direct room-name searches too.
+        -- This keeps `nx` cycling functional even when a fresh `qw` parse was
+        -- not captured (or when users immediately press nx from a shown XCP list).
+        if snd.nav.quickWhere then
+            local roomIds = {}
+            if results then
+                for _, entry in ipairs(results) do
+                    local roomId = tonumber(entry.rmid) or -1
+                    if roomId > 0 then
+                        table.insert(roomIds, roomId)
+                    end
+                end
+            end
+            snd.nav.quickWhere.rooms = roomIds
+            snd.nav.quickWhere.index = 1
+            snd.nav.quickWhere.active = #roomIds > 0
+            snd.nav.quickWhere.processed = true
+            snd.nav.quickWhere.pendingMatches = {}
+            snd.nav.quickWhere.scope = (snd.targets.current and snd.targets.current.activity) or "unknown"
+            persistQuickWhereScope(snd.nav.quickWhere.scope)
+            if snd.targets.current then
+                snd.nav.quickWhere.targetKey = snd.commands.buildQuickWhereTargetKeyFromCurrent(snd.targets.current)
+            else
+                snd.nav.quickWhere.targetKey = nil
+            end
+        end
+
+        if firstMatch and firstMatch > 0 then
+            target.roomId = firstMatch
+            snd.utils.infoNote("Going to room " .. firstMatch)
+            snd.commands.gotoRoomViaAlias(firstMatch)
+        else
+            snd.utils.infoNote("No matching rooms found for " .. target.roomName)
+        end
+        return
+    end
+
+    local areaKey = target.area or ""
+    local areaName = target.areaName or ""
+    
+    if areaKey == "" then
+        snd.utils.infoNote("Target has no area information")
+        return
+    end
+    
+    -- Get area start room
+    local startRoom = snd.db.getAreaStartRoom(areaKey)
+    
+    if startRoom and startRoom > 0 then
+        local displayName = areaName ~= "" and areaName or areaKey
+        snd.utils.infoNote("Going to " .. displayName .. " (room " .. startRoom .. ")")
+        -- Dispatch through xrt alias for navigation
+        snd.commands.gotoRoomViaAlias(startRoom)
+    else
+        snd.utils.infoNote("No start room known for " .. areaKey)
+    end
+end
+
+-------------------------------------------------------------------------------
+-- go - Navigate to a search result index
+-------------------------------------------------------------------------------
+
+function snd.commands.goToIndex(args)
+    local index
+    if type(args) == "number" then
+        index = args
+    else
+        index = tonumber(snd.utils.trim(args or ""))
+    end
+    if not index then
+        snd.utils.infoNote("Usage: go <index>")
+        return
+    end
+
+    local entry = snd.nav.gotoList and snd.nav.gotoList[index] or nil
+    if not entry then
+        snd.utils.infoNote("No target at index " .. index)
+        return
+    end
+
+    if entry.type == "area" then
+        snd.commands.gotoArea(entry.id)
+    elseif entry.type == "room" then
+        snd.utils.infoNote("Going to room " .. entry.id)
+        snd.commands.gotoRoomViaAlias(entry.id)
+    else
+        snd.utils.infoNote("Invalid target entry at index " .. index)
+    end
+end
+
+-------------------------------------------------------------------------------
+-- xset - Configuration
+-------------------------------------------------------------------------------
+
+function snd.commands.xset(args)
+    args = snd.utils.trim(args or "")
+    
+    if args == "" then
+        snd.commands.showConfig()
+        return
+    end
+    
+    local parts = {}
+    for part in args:gmatch("%S+") do
+        table.insert(parts, part)
+    end
+    
+    local setting = parts[1]:lower()
+    local value = parts[2]
+    local normalized = value and value:lower() or nil
+    
+    if setting == "debug" then
+        if not normalized or normalized == "" then
+            snd.utils.infoNote("Debug mode: " .. (snd.config.debugMode and "ON" or "OFF"))
+        elseif normalized == "on" or normalized == "true" or normalized == "1" then
+            if snd.debug and snd.debug.setEnabled then
+                snd.debug.setEnabled(true)
+            else
+                snd.config.debugMode = true
+            end
+            snd.utils.infoNote("Debug mode: ON")
+        elseif normalized == "off" or normalized == "false" or normalized == "0" then
+            if snd.debug and snd.debug.setEnabled then
+                snd.debug.setEnabled(false)
+            else
+                snd.config.debugMode = false
+            end
+            snd.utils.infoNote("Debug mode: OFF")
+        else
+            snd.utils.infoNote("Usage: xset debug <on|off>")
+            return
+        end
+        
+    elseif setting == "silent" then
+        if not normalized or normalized == "" then
+            snd.utils.infoNote("Silent mode: " .. (snd.config.silentMode and "ON" or "OFF"))
+        elseif normalized == "on" or normalized == "true" or normalized == "1" then
+            snd.config.silentMode = true
+            cecho("\n<orange>[S&D]<reset> <cyan>Silent mode: ON<reset>\n")
+        elseif normalized == "off" or normalized == "false" or normalized == "0" then
+            snd.config.silentMode = false
+            snd.utils.infoNote("Silent mode: OFF")
+        else
+            snd.utils.infoNote("Usage: xset silent <on|off>")
+            return
+        end
+        
+    elseif setting == "speed" then
+        if not normalized or normalized == "" then
+            snd.utils.infoNote("Speed: " .. snd.config.speed)
+        elseif normalized == "run" or normalized == "walk" then
+            snd.config.speed = normalized
+            snd.utils.infoNote("Speed: " .. snd.config.speed)
+        else
+            snd.utils.infoNote("Usage: xset speed <run|walk>")
+            return
+        end
+        
+    elseif setting == "nxaction" then
+        local valid = {smartscan = true, con = true, scan = true, qs = true, none = true}
+        if not normalized or normalized == "" then
+            snd.utils.infoNote("Next action: " .. snd.config.nxAction)
+        elseif valid[normalized] then
+            snd.config.nxAction = normalized
+            snd.utils.infoNote("Next action: " .. snd.config.nxAction)
+        else
+            snd.utils.infoNote("Usage: xset nxaction <smartscan|con|scan|qs|none>")
+            return
+        end
+        
+    elseif setting == "express" then
+        if not normalized or normalized == "" then
+            snd.utils.infoNote("Express mode: " .. (snd.config.express.enabled and "ON" or "OFF"))
+        elseif normalized == "on" or normalized == "true" or normalized == "1" then
+            snd.config.express.enabled = true
+            snd.utils.infoNote("Express mode: ON")
+        elseif normalized == "off" or normalized == "false" or normalized == "0" then
+            snd.config.express.enabled = false
+            snd.utils.infoNote("Express mode: OFF")
+        else
+            snd.utils.infoNote("Usage: xset express <on|off>")
+            return
+        end
+        
+    elseif setting == "expressmin" then
+        local num = tonumber(value)
+        if not value or value == "" then
+            snd.utils.infoNote("Express min kills: " .. tostring(snd.config.express.minKillCount))
+        elseif num and num >= 1 then
+            snd.config.express.minKillCount = num
+            snd.utils.infoNote("Express min kills: " .. snd.config.express.minKillCount)
+        else
+            snd.utils.infoNote("Usage: xset expressmin <number>")
+            return
+        end
+        
+    elseif setting == "window" then
+        snd.config.window.enabled = (value == "on" or value == "true" or value == "1")
+        snd.utils.infoNote("Window: " .. (snd.config.window.enabled and "ON" or "OFF"))
+        if snd.commands.ensureGuiLoaded() then
+            if snd.config.window.enabled then
+                snd.gui.show()
+            else
+                snd.gui.hide()
+            end
+        end
+
+    elseif setting == "sound" then
+        if not value or value == "" then
+            snd.config.soundEnabled = not snd.config.soundEnabled
+        elseif value == "on" or value == "true" or value == "1" then
+            snd.config.soundEnabled = true
+        elseif value == "off" or value == "false" or value == "0" then
+            snd.config.soundEnabled = false
+        else
+            snd.utils.infoNote("Usage: xset sound [on|off]")
+            return
+        end
+        snd.utils.infoNote("Sound alerts: " .. (snd.config.soundEnabled and "ON" or "OFF"))
+        
+    elseif setting == "keyword" then
+        -- Set custom keyword for current target
+        if not snd.targets.current then
+            snd.utils.infoNote("No target selected")
+            return
+        end
+        
+        local keyword = table.concat(parts, " ", 2)
+        if keyword and keyword ~= "" then
+            snd.targets.current.keyword = keyword
+            snd.db.setMobKeyword(
+                snd.room.current.arid or snd.targets.current.area,
+                snd.targets.current.name,
+                keyword
+            )
+        else
+            snd.utils.infoNote("Usage: xset keyword <keyword>")
+        end
+        
+    elseif setting == "startroom" then
+        -- Set start room for current area
+        local roomId = tonumber(value) or tonumber(snd.room.current.rmid)
+        local area = parts[3] or snd.room.current.arid
+        
+        if roomId and area and area ~= "" then
+            snd.db.setAreaStartRoom(area, roomId)
+            snd.utils.infoNote("Set start room for " .. area .. " to " .. roomId)
+        else
+            snd.utils.infoNote("Usage: xset startroom <roomid> [area]")
+        end
+        
+    else
+        snd.utils.infoNote("Unknown setting: " .. setting)
+        snd.commands.showConfig()
+    end
+    
+    -- Save config after changes
+    snd.saveState()
+end
+
+-------------------------------------------------------------------------------
+-- xhelp - Help
+-------------------------------------------------------------------------------
+
+function snd.commands.xhelp(args)
+    args = snd.utils.trim(args or "")
+    
+    if args == "" then
+        snd.commands.showHelp()
+    elseif args == "commands" then
+        snd.commands.showCommandHelp()
+    elseif args == "config" then
+        snd.commands.showConfigHelp()
+    else
+        snd.commands.showHelp()
+    end
+end
+
+-------------------------------------------------------------------------------
+-- Display Functions
+-------------------------------------------------------------------------------
+
+local function urlEncode(s)
+    s = tostring(s or "")
+    return (s:gsub("([^%w%-_%.~])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+
+local function emitHelpCommandLink(commandText, commandToSend, hint)
+    local cmd = tostring(commandToSend or commandText or "")
+    local text = tostring(commandText or "")
+    local tooltip = tostring(hint or cmd)
+    local function linkAction()
+        local trimmed = snd.utils.trim(cmd)
+        if trimmed == "" then
+            return
+        end
+
+        -- Keep S&D help links local when possible; don't send addon commands to
+        -- the game when we can call the command API directly.
+        if trimmed == "snd" and snd and snd.commands and snd.commands.snd then
+            snd.commands.snd("")
+            return
+        end
+        if trimmed:match("^snd%s+") and snd and snd.commands and snd.commands.snd then
+            snd.commands.snd(trimmed:gsub("^snd%s+", "", 1))
+            return
+        end
+        if trimmed == "xhelp" and snd and snd.commands and snd.commands.xhelp then
+            snd.commands.xhelp("")
+            return
+        end
+        local xhelpArgs = trimmed:match("^xhelp%s+(.+)$")
+        if xhelpArgs and snd and snd.commands and snd.commands.xhelp then
+            snd.commands.xhelp(xhelpArgs)
+            return
+        end
+
+        if type(expandAlias) == "function" then
+            local ok = pcall(expandAlias, trimmed, false)
+            if ok then return end
+            pcall(expandAlias, trimmed)
+            return
+        end
+
+        if type(send) == "function" then
+            send(trimmed, false)
+        end
+    end
+    -- Use classic Mudlet links (stable rendering across consoles / logs).
+    if type(cechoLink) == "function" then
+        cechoLink("<cyan>" .. text .. "<reset>", linkAction, tooltip, true)
+    else
+        cecho(text)
+    end
+end
+
+function snd.commands.showHelp()
+    cecho("\n<white>Search and Destroy - Mudlet Port<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho("<yellow>Targeting & Combat<reset>\n")
+    cecho("  "); emitHelpCommandLink("xcp <n>", "xcp 1", "Select target by number"); cecho("       - Select target by number\n")
+    cecho("  "); emitHelpCommandLink("xcp", "xcp", "Show clickable target list"); cecho("           - Show clickable target list\n")
+    cecho("  "); emitHelpCommandLink("nx", "nx", "Go to next/current target"); cecho("            - Go to next/current target\n")
+    cecho("  "); emitHelpCommandLink("xkill", "xkill", "Kill current target"); cecho("         - Kill current target\n")
+    cecho("\n<yellow>Navigation & Search<reset>\n")
+    cecho("  "); emitHelpCommandLink("qw [mob]", "qw", "Quick where"); cecho("      - Quick where (find mob)\n")
+    cecho("  "); emitHelpCommandLink("ht [mob]", "ht", "Hunt trick"); cecho("      - Hunt trick (track mob)\n")
+    cecho("  "); emitHelpCommandLink("xrt <area|roomid>", "xhelp commands", "See xrt help"); cecho(" - Navigate via mapper pathing\n")
+    cecho("  "); emitHelpCommandLink("walkto <area|roomid>", "xhelp commands", "See walkto help"); cecho(" - Walk only (no portals/recalls)\n")
+    cecho("\n<yellow>Windows & UI<reset>\n")
+    cecho("  "); emitHelpCommandLink("snd conwin", "snd conwin help", "Open ConWin commands"); cecho("    - Open conwin commands\n")
+    cecho("  "); emitHelpCommandLink("snd window font <n>", "snd window font 10", "Set S&D window font size"); cecho(" - Set window font size\n")
+    cecho("\n<yellow>Data & Reporting<reset>\n")
+    cecho("  "); emitHelpCommandLink("snd status", "snd status", "Show status"); cecho("    - Show current status\n")
+    cecho("  "); emitHelpCommandLink("snd db", "snd db", "Show database info/path"); cecho("        - Show database info/path\n")
+    cecho("  "); emitHelpCommandLink("snd channel", "snd channel", "Show/set report channel"); cecho("   - Show/set report channel\n")
+    cecho("  "); emitHelpCommandLink("snd history", "snd history", "Show history"); cecho("   - Show last 20 history rows\n")
+    cecho("\n<yellow>Help<reset>\n")
+    cecho("  "); emitHelpCommandLink("xhelp", "xhelp", "Show this help"); cecho("         - Show this help\n")
+    cecho("  "); emitHelpCommandLink("xhelp commands", "xhelp commands", "Detailed commands help"); cecho(" - Detailed command usage and examples\n")
+    cecho("  "); emitHelpCommandLink("xhelp config", "xhelp config", "Configuration help"); cecho("   - Configuration help\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showConwinHelp()
+    local mode = (snd.config and snd.config.conwin and snd.config.conwin.mode) or "consider"
+    local enabled = (snd.config and snd.config.conwin and snd.config.conwin.enabled) and "on" or "off"
+    local repopulate = (snd.config and snd.config.conwin and snd.config.conwin.repopulate) or 3
+    local focusMode = ((snd.config and snd.config.conwin and snd.config.conwin.strictFocusIdOnly) and "strict" or "fallback")
+    cecho("\n<white>Search and Destroy - ConWin Commands<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho(string.format("  <dim_gray>Status:<reset> enabled=<cyan>%s<reset>, mode=<cyan>%s<reset>, repopulate=<cyan>%s<reset>, focusid=<cyan>%s<reset>\n", enabled, mode, tostring(repopulate), focusMode))
+    cecho("  "); emitHelpCommandLink("snd conwin help", "snd conwin help", "Show conwin help"); cecho("         - Show this help\n")
+    cecho("  "); emitHelpCommandLink("snd conwin on", "snd conwin on", "Enable ConWin"); cecho("            - Enable ConWin window\n")
+    cecho("  "); emitHelpCommandLink("snd conwin off", "snd conwin off", "Disable ConWin"); cecho("           - Disable ConWin window\n")
+    cecho("  "); emitHelpCommandLink("snd conwin toggle", "snd conwin toggle", "Toggle ConWin"); cecho("        - Toggle ConWin window\n")
+    cecho("  "); emitHelpCommandLink("snd conwin refresh", "snd conwin refresh", "Run consider all now"); cecho("       - Run consider all and refresh list\n")
+    cecho("  "); emitHelpCommandLink("snd conwin clear", "snd conwin clear", "Clear current ConWin list"); cecho("         - Clear current ConWin mob list\n")
+    cecho("  "); emitHelpCommandLink("snd conwin consider", "snd conwin consider", "Set room-action mode consider"); cecho("      - Action on room change: consider\n")
+    cecho("  "); emitHelpCommandLink("snd conwin scan", "snd conwin scan", "Set room-action mode scan"); cecho("          - Action on room change: scan\n")
+    cecho("  "); emitHelpCommandLink("snd conwin mode off", "snd conwin mode off", "Disable room-action mode"); cecho("      - Action on room change: off\n")
+    cecho("  "); emitHelpCommandLink("snd conwin fontsize 10", "snd conwin fontsize 10", "Set ConWin font size"); cecho("  - Set ConWin font size (6-24)\n")
+    cecho("  "); emitHelpCommandLink("snd conwin killcommand <command>", "snd conwin killcommand", "Show current kill command"); cecho(" - Show current kill command (append <command> to set)\n")
+    cecho("  "); emitHelpCommandLink("snd conwin focusid <strict | fallback>", "snd conwin focusid", "Show current focus mode"); cecho(" - Show focus mode (set strict to require selected duplicate)\n")
+    cecho("  "); emitHelpCommandLink("snd conwin aligntags <on|off>", "snd conwin aligntags", "Show alignment tag setting"); cecho(" - Show alignment tags state (G/E markers)\n")
+    cecho("\n<dim_gray>Clicking a mob line sends kill command.\n")
+    cecho("<dim_gray>For duplicate names, ConWin uses numbered form (e.g. kill 2.name).<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showConwinHelp()
+    local mode = (snd.config and snd.config.conwin and snd.config.conwin.mode) or "consider"
+    local enabled = (snd.config and snd.config.conwin and snd.config.conwin.enabled) and "on" or "off"
+    local repopulate = (snd.config and snd.config.conwin and snd.config.conwin.repopulate) or 3
+    local focusMode = ((snd.config and snd.config.conwin and snd.config.conwin.strictFocusIdOnly) and "strict" or "fallback")
+    cecho("\n<white>Search and Destroy - ConWin Commands<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho(string.format("  <dim_gray>Status:<reset> enabled=<cyan>%s<reset>, mode=<cyan>%s<reset>, repopulate=<cyan>%s<reset>, focusid=<cyan>%s<reset>\n", enabled, mode, tostring(repopulate), focusMode))
+    cecho("  ")
+    cechoLink("<cyan>snd conwin help<reset>", [[snd.commands.snd("conwin help")]], "Show conwin help", true)
+    cecho("         - Show this help\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin on<reset>", [[snd.commands.snd("conwin on")]], "Enable ConWin", true)
+    cecho(" | ")
+    cechoLink("<cyan>off<reset>", [[snd.commands.snd("conwin off")]], "Disable ConWin", true)
+    cecho(" | ")
+    cechoLink("<cyan>toggle<reset>", [[snd.commands.snd("conwin toggle")]], "Toggle ConWin", true)
+    cecho(" - Enable/disable/toggle ConWin\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin refresh<reset>", [[snd.commands.snd("conwin refresh")]], "Run consider all now", true)
+    cecho("      - Run consider all and refresh list\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin clear<reset>", [[snd.commands.snd("conwin clear")]], "Clear current ConWin list", true)
+    cecho("        - Clear current ConWin mob list\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin consider<reset>", [[snd.commands.snd("conwin consider")]], "Set room-action mode consider", true)
+    cecho(" | ")
+    cechoLink("<cyan>scan<reset>", [[snd.commands.snd("conwin scan")]], "Set room-action mode scan", true)
+    cecho(" | ")
+    cechoLink("<cyan>mode off<reset>", [[snd.commands.snd("conwin mode off")]], "Disable room-action mode", true)
+    cecho(" - Action on room change\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin fontsize 10<reset>", [[snd.commands.snd("conwin fontsize 10")]], "Set ConWin font size", true)
+    cecho(" - Set ConWin font size (6-24)\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin killcommand <command><reset>", [[snd.commands.snd("conwin killcommand")]], "Show current kill command", true)
+    cecho(" - Show current kill command (append <command> to set)\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin repopulate 3<reset>", [[snd.commands.snd("conwin repopulate 3")]], "Refresh list after N kills", true)
+    cecho("  - Refresh list after N kills (0 disables)\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin focusid <strict | fallback><reset>", [[snd.commands.snd("conwin focusid")]], "Show current focus-id mode", true)
+    cecho(" - Show focus-id mode (strict requires explicit duplicate selection)\n")
+    cecho("  ")
+    cechoLink("<cyan>snd conwin aligntags <on|off><reset>", [[snd.commands.snd("conwin aligntags")]], "Show alignment tag display setting", true)
+    cecho(" - Show alignment tags setting ((G)/(E) prefixes)\n")
+    cecho("\n<dim_gray>Clicking a mob line sends kill command.\n")
+    cecho("<dim_gray>For duplicate names, ConWin uses numbered form (e.g. kill 2.name).<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showCommandHelp()
+    cecho("\n<white>Search and Destroy - Commands<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho("<yellow>Target Selection:<reset>\n")
+    cecho("  <cyan>xcp<reset>              Show all targets\n")
+    cecho("  <cyan>xcp <n><reset>          Select target #n\n")
+    cecho("\n<yellow>Navigation:<reset>\n")
+    cecho("  <cyan>nx<reset>               Go to current target\n")
+    cecho("  <cyan>xrt <area|roomid><reset>  Go to area or room (portal-aware)\n")
+    cecho("  <cyan>xrtforce <area|roomid><reset>  Go to area/room (ignores exits.level locks)\n")
+    cecho("  <cyan>walkto <area|roomid><reset>  Walk to area or room (no portals)\n")
+    cecho("  <cyan>qw [keyword]<reset>     Where is the mob?\n")
+    cecho("  <cyan>ht [keyword]<reset>     Hunt trick to mob\n")
+    cecho("\n<yellow>Configuration:<reset>\n")
+    cecho("  <cyan>xset<reset>             Show all settings\n")
+    cecho("  <cyan>xset sound [on|off]<reset> Toggle/query sound alerts\n")
+    cecho("  <cyan>xset keyword <kw><reset>  Set mob keyword\n")
+    cecho("  <cyan>xset startroom<reset>   Set area start room\n")
+    cecho("\n<yellow>History & Reporting:<reset>\n")
+    cecho("  <cyan>snd channel<reset>              Show current S&D report channel\n")
+    cecho("  <cyan>snd channel default<reset>      Use default colored echo output\n")
+    cecho("  <cyan>snd channel <cmd><reset>        Send history row reports via channel command\n")
+    cecho("  <dim_gray>Examples: snd channel gt | snd channel ct | snd channel say<reset>\n")
+    cecho("  <cyan>snd history<reset>              Show last 20 history rows (echo only)\n")
+    cecho("  <cyan>snd history last <n><reset>     Show last n rows (echo only)\n")
+    cecho("  <cyan>snd history <q|quest|cp|campaign|gq|gquest><reset>  Filter by run type\n")
+    cecho("  <cyan>snd history <type> last <n><reset>           Filtered rows + count (e.g. q/cp/gq)\n")
+    cecho("  <cyan>snd history report <n> [channel]<reset>   Report one shown row (optional channel override)\n")
+    cecho("  <dim_gray>Tip: left-click row number in snd history for configured channel; right-click for menu.<reset>\n")
+    cecho("\n<yellow>ConWin:<reset>\n")
+    cecho("  <cyan>snd conwin help<reset>           ConWin command family\n")
+    cecho("  <cyan>snd conwin on|off|toggle<reset>  Toggle consider window\n")
+    cecho("  <cyan>snd conwin fontsize <n><reset>   Set ConWin font size\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showConfigHelp()
+    cecho("\n<white>Search and Destroy - Configuration<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho("<yellow>Settings (xset <name> <value>):<reset>\n")
+    cecho("  <cyan>debug<reset>        <on|off>  Show internal debug notes\n")
+    cecho("                Examples: xset debug on | xset debug off\n")
+    cecho("  <cyan>silent<reset>       <on|off>  Hide regular [S&D] info notes\n")
+    cecho("                Error notes still show.\n")
+    cecho("  <cyan>speed<reset>        <run|walk>  Default travel mode for nx/go\n")
+    cecho("                run=xrt (portal-aware), walk=walkto (no portals)\n")
+    cecho("  <cyan>nxaction<reset>     <smartscan|con|scan|qs|none>\n")
+    cecho("                default   = qs\n")
+    cecho("                smartscan = local smart scan routine (scan for activity targets; fallback to quick scan when none)\n")
+    cecho("                con       = send 'con'\n")
+    cecho("                scan      = send 'scan'\n")
+    cecho("                qs        = scan current target keyword (or plain scan)\n")
+    cecho("                none      = do nothing on arrival\n")
+    cecho("  <cyan>express<reset>      <on|off>  Prefer known fixed-room targets\n")
+    cecho("  <cyan>expressmin<reset>   <number>  Min kills before express applies\n")
+    cecho("  <cyan>window<reset>       on/off - GUI window\n")
+    cecho("  <cyan>sound<reset>        on/off - Sound alerts (quest-ready, etc)\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+-------------------------------------------------------------------------------
+-- Temp Alias Registration (for manual installs without XML)
+-------------------------------------------------------------------------------
+
+local function sndHasAlias(name)
+    if type(getAlias) == "function" then
+        local ok, alias = pcall(getAlias, name)
+        if ok and alias ~= nil then
+            return true
+        end
+    end
+
+    if type(getAliasList) == "function" then
+        local ok, aliases = pcall(getAliasList)
+        if ok and type(aliases) == "table" then
+            for _, alias in ipairs(aliases) do
+                if alias.name == name then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+function snd.commands.registerTempAliases()
+    if type(tempAlias) ~= "function" then
+        return
+    end
+
+    snd.commands.tempAliases = snd.commands.tempAliases or {}
+    local tempAliases = snd.commands.tempAliases
+
+    local function register(name, pattern, handler)
+        if sndHasAlias(name) then
+            return
+        end
+        if tempAliases[name] then
+            killAlias(tempAliases[name])
+        end
+        tempAliases[name] = tempAlias(pattern, handler)
+    end
+
+	register("qs", "^qs$", function() snd.gui.quickScan() end)
+    register("snd", "^snd(.*)$", function() snd.commands.snd(matches[2]) end)
+    register("xhelp", "^xhelp(.*)$", function() snd.commands.xhelp(matches[2]) end)
+    register("xcp", "^xcp(.*)$", function() snd.commands.xcp(matches[2]) end)
+    register("qw", "^qw(.*)$", function() snd.commands.qw(matches[2]) end)
+    register("nx", "^nx$", function() snd.commands.nx() end)
+    register("ht", "^ht(.*)$", function() snd.commands.ht(matches[2]) end)
+    register("xset", "^xset(.*)$", function() snd.commands.xset(matches[2]) end)
+    register("go", "^go(.*)$", function() snd.commands.goToIndex(matches[2]) end)
+    register("qref", "^qref$", function() snd.commands.qref() end)
+    register("xkill", "^xkill$", function() snd.commands.xkill() end)
+    register("xcmd", "^xcmd(.*)$", function() snd.commands.xcmd(matches[2]) end)
+    register("__snd_hist_report", "^__snd_hist_report%s+(%d+)%s+(%S+)$", function()
+        snd.commands.reportHistoryRow(matches[2], matches[3])
+    end)
+end
+
+function snd.commands.showConfig()
+    cecho("\n<white>Search and Destroy - Current Settings<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    cecho(string.format("  <cyan>debug<reset>       %s\n", snd.config.debugMode and "ON" or "OFF"))
+    cecho(string.format("  <cyan>silent<reset>      %s\n", snd.config.silentMode and "ON" or "OFF"))
+    cecho(string.format("  <cyan>speed<reset>       %s\n", snd.config.speed))
+    cecho(string.format("  <cyan>nxaction<reset>    %s\n", snd.config.nxAction))
+    cecho(string.format("  <cyan>express<reset>     %s\n", snd.config.express.enabled and "ON" or "OFF"))
+    cecho(string.format("  <cyan>expressmin<reset>  %d\n", snd.config.express.minKillCount))
+    cecho(string.format("  <cyan>window<reset>      %s\n", snd.config.window.enabled and "ON" or "OFF"))
+    cecho(string.format("  <cyan>sound<reset>       %s\n", snd.config.soundEnabled and "ON" or "OFF"))
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showStatus()
+    cecho("\n<white>Search and Destroy - Status<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    
+    -- Character info
+    cecho(string.format("  <yellow>Character:<reset> %s (Level %d)\n", 
+        snd.char.name or "Unknown", snd.char.level or 0))
+    cecho(string.format("  <yellow>Room:<reset> %s (%s)\n",
+        snd.room.current.name or "Unknown", snd.room.current.arid or "Unknown"))
+    
+    -- Campaign status
+    if snd.campaign.active then
+        local remaining = snd.cp.getRemainingCount()
+        cecho(string.format("  <yellow>Campaign:<reset> <green>Active<reset> (%d remaining)\n", remaining))
+    else
+        cecho("  <yellow>Campaign:<reset> <gray>None<reset>\n")
+    end
+    
+    -- GQuest status
+    if snd.gquest.active then
+        local remaining = snd.gq.getRemainingCount()
+        local kills = snd.gq.getTotalRemainingKills()
+        cecho(string.format("  <yellow>GQuest:<reset> <green>#%s<reset> (%d targets, %d kills)\n",
+            snd.gquest.joined, remaining, kills))
+    else
+        cecho("  <yellow>GQuest:<reset> <gray>None<reset>\n")
+    end
+    
+    -- Quest status
+    if snd.quest.active then
+        cecho(string.format("  <yellow>Quest:<reset> <green>%s<reset> in %s\n",
+            snd.quest.target.mob, snd.quest.target.area))
+    else
+        cecho("  <yellow>Quest:<reset> <gray>None<reset>\n")
+    end
+    
+    -- Current target
+    if snd.targets.current then
+        cecho(string.format("  <yellow>Target:<reset> %s [%s]\n",
+            snd.targets.current.name or snd.targets.current.keyword,
+            snd.targets.current.activity or "none"))
+    else
+        cecho("  <yellow>Target:<reset> <gray>None selected<reset>\n")
+    end
+    
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showTargets()
+    cecho("\n<white>Search and Destroy - Target List<reset>\n")
+    cecho("<dim_gray>----------------------------------------<reset>\n")
+    
+    local activityConfig = {
+        {key = "gq", label = "Global Quest", color = "dodger_blue"},
+        {key = "quest", label = "Quest", color = "magenta"},
+        {key = "cp", label = "Campaign", color = "green"},
+    }
+
+    local activityHasTargets = {}
+    for _, target in ipairs(snd.targets.list) do
+        activityHasTargets[target.activity] = true
+    end
+
+    local hasAnyTargets = activityHasTargets.gq or activityHasTargets.quest or activityHasTargets.cp
+    if not hasAnyTargets then
+        local now = os.clock()
+        if now - (snd.targets.lastAutoRefresh or 0) > 10 then
+            snd.targets.lastAutoRefresh = now
+            send("quest check", false)
+            send("cp info", false)
+            send("gq info", false)
+        end
+        cecho("  <dim_gray>No targets - refreshing quest check, cp info, and gq info...<reset>\n")
+        cecho("<dim_gray>----------------------------------------<reset>\n")
+        return
+    end
+
+    for _, activity in ipairs(activityConfig) do
+        if activityHasTargets[activity.key] then
+            cecho(string.format("  <%s>%s<reset>\n", activity.color or "white", activity.label))
+            cecho("<dim_gray>----------------------------------------<reset>\n")
+
+            local index = 0
+            for _, target in ipairs(snd.targets.list) do
+                if target.activity == activity.key then
+                    index = index + 1
+
+                    local prefix = ""
+                    local prefixColor = "gray"
+
+                    if target.activity == "cp" then
+                        prefix = "CP"
+                        prefixColor = "green"
+                    elseif target.activity == "gq" then
+                        prefix = "GQ"
+                        prefixColor = "dodger_blue"
+                    elseif target.activity == "quest" then
+                        prefix = "QT"
+                        prefixColor = "magenta"
+                    end
+
+                    local status = ""
+                    if target.dead then
+                        status = " [DEAD]"
+                    elseif target.remaining and target.remaining > 1 then
+                        status = string.format(" (x%d)", target.remaining)
+                    end
+                    local isCurrent = snd.targets.current and targetMatchesCurrent(target, snd.targets.current)
+                    local rowLead = (target.activity == "cp" and isCurrent) and "<orange_red>▶<reset> " or "  "
+
+                    -- Build the line
+                    if not target.dead then
+                        -- Clickable index number
+                        cecho(rowLead)
+                        cecho(string.format(" <%s>%2d.<reset>", (target.activity == "cp" and isCurrent) and "orange_red" or "yellow", index))
+                        cecho(string.format("<%s>[%s]<reset> ", prefixColor, prefix))
+
+                        -- Clickable mob name
+                        local areaKey = target.arid or ""
+                        if target.hasMobData == false then
+                            cecho("<red>")
+                            setUnderline(true)
+                            echoLink(target.mob,
+                                [[snd.commands.qw(]] .. string.format("%q", target.mob) .. [[)]],
+                                "Quick where: " .. target.mob, true)
+                            setUnderline(false)
+                            cecho("<reset>")
+                        else
+                            setUnderline(true)
+                            echoLink(target.mob,
+                                [[snd.commands.selectTarget(]] .. index .. [[, "]] .. target.activity .. [[")]],
+                                "Click to select target", true)
+                            setUnderline(false)
+                        end
+
+                        cecho(status)
+
+                        -- Area on same line
+                        if target.loc and target.loc ~= "" then
+                            cecho(" <dim_gray>in<reset> ")
+                            if areaKey ~= "" then
+                                setUnderline(true)
+                                echoLink(target.loc,
+                                    [[snd.commands.gotoArea("]] .. areaKey .. [[")]],
+                                    "Click to go to " .. areaKey, true)
+                                setUnderline(false)
+                            else
+                                cecho("<cyan>" .. target.loc .. "<reset>")
+                            end
+                        end
+
+                        echo("  ")
+                        echoLink("[goto]",
+                            [[snd.commands.selectAndGo(]] .. index .. [[, "]] .. target.activity .. [[")]],
+                            "Select and go to target", true)
+                        echo("\n")
+                    else
+                        cecho(string.format("%s<dim_gray>%2d. [%s] %s%s<reset>\n",
+                            rowLead, index, prefix, target.mob, " [DEAD]"))
+                    end
+                end
+            end
+
+            cecho("<dim_gray>----------------------------------------<reset>\n")
+
+            if activity.key == "gq" then
+                local remain = snd.gq.getRemainingCount()
+                local kills = snd.gq.getTotalRemainingKills()
+                cecho(string.format("  <dodger_blue>%d mobs remaining (%d kills)<reset>", remain, kills))
+                echo("  ")
+                echoLink("[check]", [[send("gq check", false)]], "Check GQ progress", true)
+                echo("\n")
+            elseif activity.key == "quest" then
+                if snd.quest.target.status == "killed" then
+                    cecho("  <green>Target killed - return to questor!<reset>\n")
+                else
+                    cecho(string.format("  <magenta>Time: %d min<reset>", snd.quest.timer or 0))
+                    echo("  ")
+                    echoLink("[goto]", [[snd.commands.nx()]], "Go to target", true)
+                    echo("  ")
+                    echoLink("[where]", [[snd.commands.qw(\"\")]], "Quick where", true)
+                    echo("\n")
+                end
+            elseif activity.key == "cp" then
+                local remain = snd.cp.getRemainingCount()
+                cecho(string.format("  <green>%d mobs remaining<reset>", remain))
+                echo("  ")
+                echoLink("[check]", [[send("cp check", false)]], "Check CP progress", true)
+                echo("  ")
+                echoLink("[info]", [[send("cp info", false)]], "Refresh CP info", true)
+                echo("\n")
+            end
+        end
+    end
+    
+    -- Show current target
+    if snd.targets.current then
+        cecho("  <yellow>Current:<reset> " .. (snd.targets.current.name or snd.targets.current.keyword))
+        if snd.targets.current.area and snd.targets.current.area ~= "" then
+            cecho(" <dim_gray>in<reset> " .. snd.targets.current.area)
+        end
+        echo("  ")
+        echoLink("[goto]", [[snd.commands.nx()]], "Go to target", true)
+        echo("  ")
+        echoLink("[where]", [[snd.commands.qw("")]], "Quick where", true)
+        echo("\n")
+    end
+end
+
+--- Select a target by index and activity type (for clickable links)
+function snd.commands.selectTarget(index, activity)
+    clearNxOverride()
+    if activity == "cp" then
+        snd.cp.selectTarget(index)
+    elseif activity == "gq" then
+        snd.gq.selectTarget(index)
+    elseif activity == "quest" then
+        snd.commands.selectQuestTarget()
+    end
+    if snd.targets and snd.targets.current and snd.targets.current.activity then
+        setScopedCurrent(snd.targets.current.activity, snd.targets.current)
+        activateQuickWhereScope(snd.targets.current.activity)
+        if snd.setActiveTab then
+            snd.setActiveTab(snd.targets.current.activity, {save = true, refresh = false})
+        end
+    end
+end
+
+--- Select quest target as current target
+function snd.commands.selectQuestTarget()
+    if not snd.quest.active or not snd.quest.target.mob or snd.quest.target.mob == "" then
+        snd.utils.infoNote("No active quest")
+        return
+    end
+    
+    -- Find quest target in list
+    for _, target in ipairs(snd.targets.list) do
+        if target.activity == "quest" then
+            local roomName = target.roomName
+            if not roomName or roomName == "" then
+                roomName = snd.utils.stripColors(snd.quest.target.room or "")
+            end
+            snd.targets.current = {
+                name = target.mob,
+                keyword = target.keyword or snd.utils.findKeyword(target.mob),
+                area = target.arid or "",
+                areaName = target.loc or "",
+                roomName = roomName or "",
+                roomId = target.roomId,
+                activity = "quest",
+            }
+            clearNxOverride()
+            if snd.db and snd.db.getMobLocations and snd.nav and snd.nav.quickWhere then
+                local rooms = {}
+                local questRoomName = snd.utils.stripColors(roomName or "")
+                local questAreaKey = target.arid or snd.quest.target.arid or ""
+                if questAreaKey == "" and snd.quest.target.area and snd.quest.target.area ~= "" and snd.db.getAreaKeyFromName then
+                    questAreaKey = snd.db.getAreaKeyFromName(snd.quest.target.area) or ""
+                end
+
+                local locations = snd.db.getMobLocations(target.mob, questAreaKey) or {}
+                local filteredLocations = {}
+
+                -- Quest cache fallback: if area key is missing, prefer rows that also match
+                -- the quest room name to avoid cross-zone mob-name collisions.
+                if questAreaKey == "" and questRoomName ~= "" then
+                    for _, row in ipairs(locations) do
+                        local rowRoom = snd.utils.stripColors(row.room or row.name or "")
+                        if rowRoom == questRoomName then
+                            table.insert(filteredLocations, row)
+                        end
+                    end
+                else
+                    filteredLocations = locations
+                end
+
+                for _, row in ipairs(filteredLocations) do
+                    local roomId = tonumber(row.roomid or row.rmid)
+                    if roomId and roomId > 0 then
+                        table.insert(rooms, roomId)
+                    end
+                end
+
+                -- If cache is empty but quest gives a concrete room+area, fall back to
+                -- room-name mapping scoped to the quest area.
+                if #rooms == 0 and questRoomName ~= "" and snd.mapper and snd.mapper.searchRoomsExact then
+                    local mapped = snd.mapper.searchRoomsExact(questRoomName, questAreaKey, target.mob, {
+                        activity = "quest",
+                        silent = true,
+                    }) or {}
+                    for _, entry in ipairs(mapped) do
+                        local roomId = tonumber(entry.rmid)
+                        if roomId and roomId > 0 then
+                            table.insert(rooms, roomId)
+                        end
+                    end
+                end
+
+                snd.nav.quickWhere.rooms = rooms
+                snd.nav.quickWhere.index = 1
+                snd.nav.quickWhere.active = #rooms > 0
+                snd.nav.quickWhere.processed = true
+                snd.nav.quickWhere.pendingMatches = {}
+                snd.nav.quickWhere.scope = "quest"
+                snd.nav.quickWhere.targetKey = snd.commands.buildQuickWhereTargetKeyFromCurrent(snd.targets.current)
+                persistQuickWhereScope("quest")
+            end
+            setScopedCurrent("quest", snd.targets.current)
+            activateQuickWhereScope("quest")
+            if snd.setActiveTab then
+                snd.setActiveTab("quest", {save = true, refresh = false})
+            end
+            snd.utils.infoNote("Quest target selected: " .. target.mob)
+            return
+        end
+    end
+end
+
+--- Select quest target, navigate to it, and execute xkill
+function snd.commands.selectQuestTargetAndKill()
+    snd.commands.selectQuestTarget()
+    tempTimer(0.1, function()
+        snd.commands.gotoTarget()
+    end)
+    tempTimer(0.2, function()
+        snd.commands.xkill()
+    end)
+end
+
+--- Select and immediately go to target (for clickable links)
+function snd.commands.selectAndGo(index, activity)
+    snd.commands.selectTarget(index, activity)
+    tempTimer(0.1, function()
+        snd.commands.gotoTarget()
+    end)
+end
+
+--- Go to an area by key (for clickable links)
+function snd.commands.gotoArea(areaKey)
+    if not areaKey or areaKey == "" then
+        snd.utils.infoNote("No area key provided")
+        return
+    end
+    
+    local startRoom = snd.db.getAreaStartRoom(areaKey)
+    if startRoom and startRoom > 0 then
+        snd.utils.infoNote("Going to " .. areaKey .. " (room " .. startRoom .. ")")
+        -- Dispatch through xrt alias for navigation
+        snd.commands.gotoRoomViaAlias(startRoom)
+    else
+        snd.utils.infoNote("No start room for " .. areaKey)
+    end
+end
+
+function snd.commands.showStats()
+    cecho("\n<white>Search and Destroy - Statistics<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    
+    -- Database stats
+    local dbStats = snd.db.getStats()
+    cecho(string.format("  <yellow>Database:<reset>\n"))
+    cecho(string.format("    Mobs tracked: %d\n", dbStats.mobs))
+    cecho(string.format("    Areas: %d\n", dbStats.areas))
+    cecho(string.format("    Custom keywords: %d\n", dbStats.keywords))
+    cecho(string.format("    History entries: %d\n", dbStats.history))
+    
+    -- History stats (last 14 days)
+    local histStats = snd.db.getHistoryStats(nil, 14)
+    cecho(string.format("\n  <yellow>Last 14 days:<reset>\n"))
+    cecho(string.format("    Campaigns: %d\n", histStats.totalCampaigns))
+    cecho(string.format("    GQuests: %d\n", histStats.totalGquests))
+    cecho(string.format("    Quests: %d\n", histStats.totalQuests))
+    cecho(string.format("    Total QP: %s\n", snd.utils.readableNumber(histStats.totalQP)))
+    cecho(string.format("    Total Gold: %s\n", snd.utils.readableNumber(histStats.totalGold)))
+    
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+function snd.commands.showDbInfo()
+    cecho("\n<white>Search and Destroy - Database Info<reset>\n")
+    cecho("<gray>----------------------------------------<reset>\n")
+    
+    cecho("  <yellow>Current DB path:<reset>\n")
+    cecho("    " .. tostring(snd.db.file) .. "\n\n")
+    
+    -- Check if file exists
+    local f = io.open(snd.db.file, "r")
+    if f then
+        f:close()
+        cecho("  <green>File EXISTS<reset>\n")
+    else
+        cecho("  <red>File NOT FOUND<reset>\n")
+    end
+    
+    cecho("  <yellow>Connection:<reset> " .. (snd.db.isOpen and "<green>Open" or "<red>Closed") .. "<reset>\n")
+    
+    if snd.db.isOpen then
+        local stats = snd.db.getStats()
+        cecho(string.format("  <yellow>Contents:<reset> %d mobs, %d areas, %d keywords\n",
+            stats.mobs, stats.areas, stats.keywords))
+        
+        -- Show tables
+        local tables = snd.db.getTables()
+        cecho("  <yellow>Tables:<reset> " .. table.concat(tables, ", ") .. "\n")
+    end
+    
+    cecho("\n  <yellow>Mudlet profile dir:<reset>\n")
+    cecho("    " .. getMudletHomeDir() .. "\n")
+    
+    cecho("\n  <cyan>To set a different path:<reset>\n")
+    cecho("    snd db /path/to/your/snd.db\n")
+    
+    cecho("<gray>----------------------------------------<reset>\n")
+end
+
+local function historyTypeFromArg(arg)
+    local map = {
+        q = snd.db.HISTORY_TYPE_QUEST,
+        quest = snd.db.HISTORY_TYPE_QUEST,
+        gq = snd.db.HISTORY_TYPE_GQUEST,
+        gquest = snd.db.HISTORY_TYPE_GQUEST,
+        cp = snd.db.HISTORY_TYPE_CAMPAIGN,
+        campaign = snd.db.HISTORY_TYPE_CAMPAIGN,
+    }
+    return map[tostring(arg or ""):lower()]
+end
+
+local function historyTypeLabel(v)
+    if tonumber(v) == snd.db.HISTORY_TYPE_QUEST then return "quest" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_GQUEST then return "gquest" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_CAMPAIGN then return "campaign" end
+    return "unknown"
+end
+
+local function historyStatusLabel(v)
+    v = tonumber(v) or 0
+    local map = {
+        [snd.db.HISTORY_STATUS_INPROGRESS] = "in progress",
+        [snd.db.HISTORY_STATUS_COMPLETE] = "complete",
+        [snd.db.HISTORY_STATUS_TIMEOUT] = "timeout",
+        [snd.db.HISTORY_STATUS_FAILED] = "failed",
+        [snd.db.HISTORY_STATUS_RESET] = "reset",
+        [snd.db.HISTORY_STATUS_SKIPPED] = "skipped",
+        [snd.db.HISTORY_STATUS_UNDOCUMENTED] = "undocumented",
+        [0] = "in progress",
+    }
+    return map[v] or "unknown"
+end
+
+local function historyTypeColor(v)
+    if tonumber(v) == snd.db.HISTORY_TYPE_QUEST then return "red" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_GQUEST then return "dodger_blue" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_CAMPAIGN then return "green" end
+    return "white"
+end
+
+local function historyTypeAardColor(v)
+    if tonumber(v) == snd.db.HISTORY_TYPE_QUEST then return "@r" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_GQUEST then return "@c" end
+    if tonumber(v) == snd.db.HISTORY_TYPE_CAMPAIGN then return "@g" end
+    return "@w"
+end
+
+local function formatLocalDateTime(ts)
+    ts = tonumber(ts)
+    if not ts or ts <= 0 then
+        return "n/a"
+    end
+    return os.date("%Y-%m-%d %H:%M", ts)
+end
+
+local function formatDuration(startTs, endTs, status)
+    startTs = tonumber(startTs) or 0
+    endTs = tonumber(endTs) or 0
+    local s = tonumber(status) or 0
+    if s == snd.db.HISTORY_STATUS_RESET or s == snd.db.HISTORY_STATUS_SKIPPED then
+        return "n/a"
+    end
+    if startTs <= 0 or endTs <= 0 or endTs < startTs then
+        return "in progress"
+    end
+    local total = endTs - startTs
+    local hh = math.floor(total / 3600)
+    local mm = math.floor((total % 3600) / 60)
+    local ss = total % 60
+    if hh > 0 then
+        return string.format("%dh %02dm %02ds", hh, mm, ss)
+    end
+    return string.format("%dm %02ds", mm, ss)
+end
+
+local function formatRewardSummary(row)
+    local qp = tonumber(row.qp_rewards) or 0
+    local tp = tonumber(row.tp_rewards) or 0
+    local tr = tonumber(row.train_rewards) or 0
+    local pr = tonumber(row.prac_rewards) or 0
+    local gold = tonumber(row.gold_rewards) or 0
+    local parts = {}
+    if qp > 0 then table.insert(parts, qp .. "qp") end
+    if tp > 0 then table.insert(parts, tp .. "tp") end
+    if tr > 0 then table.insert(parts, tr .. "tr") end
+    if pr > 0 then table.insert(parts, pr .. "pr") end
+    if gold > 0 then table.insert(parts, gold .. "g") end
+    if #parts == 0 then
+        return "-"
+    end
+    return table.concat(parts, " ")
+end
+
+local function buildRewardCecho(row)
+    local qp = tonumber(row.qp_rewards) or 0
+    local tp = tonumber(row.tp_rewards) or 0
+    local tr = tonumber(row.train_rewards) or 0
+    local pr = tonumber(row.prac_rewards) or 0
+    local gold = tonumber(row.gold_rewards) or 0
+    local parts = {}
+    if qp > 0 then table.insert(parts, string.format("<red>%dqp<reset>", qp)) end
+    if tp > 0 then table.insert(parts, string.format("<dodger_blue>%dtp<reset>", tp)) end
+    if tr > 0 then table.insert(parts, string.format("<green>%dtr<reset>", tr)) end
+    if pr > 0 then table.insert(parts, string.format("<magenta>%dpr<reset>", pr)) end
+    if gold > 0 then table.insert(parts, string.format("<yellow>%dg<reset>", gold)) end
+    if #parts == 0 then
+        return "<dim_gray>-<reset>"
+    end
+    return table.concat(parts, " ")
+end
+
+function snd.commands.buildHistoryRowText(row)
+    if not row then
+        return ""
+    end
+    return string.format(
+        "%s | lvl %s | %s -> %s | %s | %s | rewards: %s",
+        historyTypeLabel(row.type),
+        tostring(row.level_taken or 0),
+        formatLocalDateTime(row.start_time),
+        formatLocalDateTime(row.end_time),
+        formatDuration(row.start_time, row.end_time, row.status),
+        historyStatusLabel(row.status),
+        formatRewardSummary(row)
+    )
+end
+
+function snd.commands.buildHistoryRowChannelText(row)
+    if not row then
+        return ""
+    end
+
+    local typeColor = historyTypeAardColor(row.type)
+    local typeLabel = historyTypeLabel(row.type)
+    local level = tostring(row.level_taken or 0)
+    local startText = formatLocalDateTime(row.start_time)
+    local endText = formatLocalDateTime(row.end_time)
+    local durationText = formatDuration(row.start_time, row.end_time, row.status)
+    local statusText = historyStatusLabel(row.status)
+
+    local qp = tonumber(row.qp_rewards) or 0
+    local tp = tonumber(row.tp_rewards) or 0
+    local tr = tonumber(row.train_rewards) or 0
+    local pr = tonumber(row.prac_rewards) or 0
+    local gold = tonumber(row.gold_rewards) or 0
+    local rewardParts = {}
+    if qp > 0 then table.insert(rewardParts, string.format("@r%dqp@w", qp)) end
+    if tp > 0 then table.insert(rewardParts, string.format("@c%dtp@w", tp)) end
+    if tr > 0 then table.insert(rewardParts, string.format("@g%dtr@w", tr)) end
+    if pr > 0 then table.insert(rewardParts, string.format("@m%dpr@w", pr)) end
+    if gold > 0 then table.insert(rewardParts, string.format("@y%dg@w", gold)) end
+    local rewardsText = #rewardParts > 0 and table.concat(rewardParts, " ") or "@D-@w"
+
+    return string.format(
+        "%s%s@w | @wlv %s@w | @D%s@w -> @D%s@w | @c%s@w | @m%s@w | rewards: %s",
+        typeColor,
+        typeLabel,
+        level,
+        startText,
+        endText,
+        durationText,
+        statusText,
+        rewardsText
+    )
+end
+
+local function historyChannelLabel(channel)
+    channel = snd.utils.trim(tostring(channel or "default"))
+    if channel == "" or channel == "default" then
+        return "Echo"
+    end
+    if channel == "gtell" or channel == "group" then
+        return "Group"
+    end
+    return channel:gsub("^%l", string.upper)
+end
+
+local function echoHistoryRowLink(index, configuredChannel)
+    local channel = snd.utils.trim(tostring(configuredChannel or "default"))
+    if channel == "" then
+        channel = "default"
+    end
+	
+	local rowNumber = tonumber(index) or 0
+    local defaultLabel = historyChannelLabel(channel)
+    echoPopup(
+        --string.format("[%2d]", tonumber(index) or 0),
+		string.format("[%2d]", rowNumber),
+        {
+			"",
+			"",
+            function() snd.commands.reportHistoryRow(index, channel) end,
+            "",
+            function() snd.commands.reportHistoryRow(index, "clan") end,
+            "",
+            function() snd.commands.reportHistoryRow(index, "say") end,
+            "",
+            function() snd.commands.reportHistoryRow(index, "gtell") end,
+        },
+        {
+            "Left-click: report this row via " .. defaultLabel .. "\nRight-click for other channels",
+			string.format("[%2d]", rowNumber),
+			"",
+            defaultLabel,
+            "",
+            "Clan",
+            "",
+            "Say",
+            "",
+            "Group",
+        },
+        true
+    )
+end
+
+
+function snd.commands.reportHistoryRow(index, channelOverride)
+    index = tonumber(index)
+    if not index then
+        snd.utils.infoNote("Usage: snd history report <row-number>")
+        return
+    end
+    local row = snd.history and snd.history.lastRows and snd.history.lastRows[index] or nil
+    if not row then
+        snd.utils.infoNote("No cached history row #" .. tostring(index) .. ". Run 'snd history' first.")
+        return
+    end
+    local channel = channelOverride and snd.utils.trim(tostring(channelOverride)) or "default"
+    if channel == "default" and snd.config and snd.config.reportChannel then
+        channel = snd.utils.trim(snd.config.reportChannel)
+    end
+    if channel:lower() == "group" then
+        channel = "gtell"
+    end
+
+    if channel == "" or channel == "default" then
+        snd.utils.reportLine(snd.commands.buildHistoryRowText(row), historyTypeLabel(row.type))
+        return
+    end
+
+    local payload = snd.commands.buildHistoryRowChannelText(row)
+    if snd.commands and snd.commands.sendGameCommand then
+        snd.commands.sendGameCommand(channel .. " " .. payload, false)
+    else
+        send(channel .. " " .. payload, false)
+    end
+end
+
+function snd.commands.reportHistoryRowVia(index, channelOverride)
+    index = tonumber(index)
+    if not index then
+        snd.utils.infoNote("Usage: snd history report <row-number>")
+        return
+    end
+
+    local normalized = channelOverride and snd.utils.trim(tostring(channelOverride)) or "default"
+    if normalized == "" then
+        normalized = "default"
+    end
+    snd.commands.reportHistoryRow(index, normalized)
+end
+
+function snd.commands.history(args)
+    args = snd.utils.trim(args or "")
+    local limit = 20
+    local typeFilter = nil
+
+    if args ~= "" then
+        local reportNum, reportChannel = args:match("^report%s+(%d+)%s*(%S*)$")
+        if reportNum then
+            if reportChannel == "" then
+                reportChannel = nil
+            end
+            snd.commands.reportHistoryRow(reportNum, reportChannel)
+            return
+        end
+
+        local lastNum = args:match("^last%s+(%d+)$")
+        if lastNum then
+            limit = tonumber(lastNum) or 20
+        else
+            local typeArg, maybeLast = args:match("^(%S+)%s+last%s+(%d+)$")
+            if typeArg and maybeLast then
+                typeFilter = historyTypeFromArg(typeArg)
+                limit = tonumber(maybeLast) or 20
+            else
+                typeFilter = historyTypeFromArg(args)
+                if not typeFilter then
+                    snd.utils.infoNote("Usage: snd history [q|quest|cp|campaign|gq|gquest] [last <n>] | snd history report <n> [channel]")
+                    return
+                end
+            end
+        end
+    end
+
+    local rows = snd.db.getHistoryEntries({limit = limit, type = typeFilter})
+    snd.history.lastRows = rows
+    snd.history.lastLimit = limit
+
+    cecho("\n<white>Search and Destroy - History<reset>\n")
+    cecho("<gray>--------------------------------------------------------------------------------<reset>\n")
+    cecho(string.format("<dim_gray>Showing last %d rows%s. Left-click row number to report over configured snd channel; right-click for channel menu.\n<reset>",
+        limit, typeFilter and (" for " .. historyTypeLabel(typeFilter)) or ""))
+    cecho("<dim_gray>Format: [#] type | lvl | start -> end | duration | status | rewards<reset>\n")
+
+    if #rows == 0 then
+        cecho("<yellow>No history rows found.<reset>\n")
+        cecho("<gray>--------------------------------------------------------------------------------<reset>\n")
+        return
+    end
+
+    for i, row in ipairs(rows) do
+        local tColor = historyTypeColor(row.type)
+        local rewardText = buildRewardCecho(row)
+        cecho("  ")
+        cecho("<white>")
+        local configuredChannel = "default"
+        if snd.config and snd.config.reportChannel then
+            configuredChannel = snd.utils.trim(snd.config.reportChannel)
+            if configuredChannel == "" then
+                configuredChannel = "default"
+            end
+        end
+
+        echoHistoryRowLink(i, configuredChannel)
+
+        cecho("<reset>")
+        cecho(string.format(" <%s>%-8s<reset> | ", tColor, historyTypeLabel(row.type)))
+        cecho(string.format("<white>lvl %s<reset> | ", tostring(row.level_taken or 0)))
+        cecho(string.format("<dim_gray>%s<reset> -> <dim_gray>%s<reset> | ",
+            formatLocalDateTime(row.start_time), formatLocalDateTime(row.end_time)))
+        cecho(string.format("<cyan>%s<reset> | ", formatDuration(row.start_time, row.end_time, row.status)))
+        cecho(string.format("<magenta>%s<reset> | ", historyStatusLabel(row.status)))
+        cecho(rewardText)
+        cecho("\n")
+    end
+
+    cecho("<gray>--------------------------------------------------------------------------------<reset>\n")
+    cecho("<dim_gray>Whole-history reporting is echo-only by design. Use row click/right-click menu or 'snd history report <n>' for channel output.<reset>\n")
+end
+
+function snd.commands.channel(args)
+    args = snd.utils.trim(args or "")
+    if args == "" then
+        snd.utils.infoNote("S&D report channel: " .. tostring(snd.config.reportChannel or "default"))
+        snd.utils.infoNote("Usage: snd channel default | snd channel <channel-command>")
+        return
+    end
+
+    if args:lower() == "default" then
+        snd.config.reportChannel = "default"
+        snd.saveState()
+        snd.utils.infoNote("S&D report channel set to default echo.")
+        return
+    end
+
+    snd.config.reportChannel = args
+    snd.saveState()
+    snd.utils.infoNote("S&D report channel set to: " .. args)
+end
+
+-- Module loaded silently
