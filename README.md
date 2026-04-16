@@ -1,3 +1,4 @@
+
 **Mapper + Search and Destroy Database Guide (Mudlet)**
 
 This guide explains where to place your database files, how to name them, and which commands to use to inspect/import/convert/rebuild map data for both mapper and Search and Destroy (S&D).
@@ -136,3 +137,36 @@ Verify mapper module is loaded and use path display commands (mapper database, m
 Nothing is working
 
 Close Mudlet and use Mushclient :)
+
+A few screenshots on S&D and Mmapper in action!
+
+S&D main window:
+
+<img width="457" height="508" alt="2026-04-15 19_45_50-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/f4abf9ef-7864-41f6-865c-112438815807" />
+<img width="460" height="509" alt="2026-04-12 21_56_29-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/bd8fa262-bb50-45d0-87cf-ae31772a3542" />
+<img width="456" height="508" alt="2026-04-12 21_57_06-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/951bfb21-4f89-4993-b0c8-e7336d69a115" />
+
+Yes, S&D is multi window now. It transitions from window to window based on priority GQ -> quest -> CP. Clicking on a tab will manually change windows. All buttons are scoped for the selected window. i.e. xcp 1 will select first mob in quest window -> change window to cp, xcp 1 will select first cp monster etc
+
+S&D consider window (conwin)
+
+<img width="342" height="414" alt="2026-04-14 18_47_17-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/0318d732-8e6c-4874-b3e5-aceb1832b99c" />
+<img width="337" height="413" alt="2026-04-12 19_46_06-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/a1cfa626-86f4-4518-a700-c7e2dcc18db1" />
+
+I've added a consider window to S&D. It supports monster HP left, quest/cp/gq tags, custom attack command, auto refresh on X kills and much more!
+It's API is tied in with S&D, to use the same consider/scan command for both of them resulting in less spam.
+
+
+A few Mmapper screenshots:
+
+Main map:
+
+<img width="343" height="384" alt="2026-04-16 22_04_23-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/c28b7352-892b-499b-b38f-db556069c71b" />
+
+It natively supports multi-layer, meaning you can see the "down" or "up" rooms while being 1 up or 1 down. This can be disabled if you want to be oldschool.
+
+Mini map:
+
+<img width="341" height="454" alt="2026-04-16 22_04_14-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/d5142888-bd23-4593-b501-89c02ecd19e7" />
+
+CLASSIC!
