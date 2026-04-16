@@ -157,6 +157,10 @@ S&D consider window (conwin)
 I've added a consider window to S&D. It supports monster HP left, quest/cp/gq tags, custom attack command, auto refresh on X kills and much more!
 It's API is tied in with S&D, to use the same consider/scan command for both of them resulting in less spam.
 
+S&D history with context menu report
+
+<img width="1249" height="389" alt="2026-04-16 22_49_26-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/6cd23a9c-4ae9-425f-8efe-a440c73f0610" />
+
 
 A few Mmapper screenshots:
 
