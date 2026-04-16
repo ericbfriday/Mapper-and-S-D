@@ -141,6 +141,9 @@ Close Mudlet and use Mushclient :)
 
 A few screenshots on S&D and Mmapper in action!
 
+<img width="3440" height="1400" alt="2026-04-16 23_22_08-NVIDIA GeForce Overlay" src="https://github.com/user-attachments/assets/d4bdcf57-3c3b-4eaa-8c4b-978059d11f46" />
+
+
 S&D main window:
 
 <img width="457" height="508" alt="2026-04-15 19_45_50-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/f4abf9ef-7864-41f6-865c-112438815807" />
