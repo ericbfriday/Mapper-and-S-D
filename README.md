@@ -170,3 +170,10 @@ Mini map:
 <img width="341" height="454" alt="2026-04-16 22_04_14-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/d5142888-bd23-4593-b501-89c02ecd19e7" />
 
 CLASSIC!
+
+
+To anyone who has made it this far: While these addons have many many improvements, including navigation and path discovery, bugs may still be arround! Be sure to use at your own risk!
+
+To anyone that wants to modify these files: 
+
+<img width="498" height="207" alt="dew-it-galactic-republic" src="https://github.com/user-attachments/assets/1b3b4766-ff0e-4d1c-b46b-e621dc309ec4" />
