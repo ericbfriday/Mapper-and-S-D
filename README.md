@@ -160,6 +160,8 @@ It's API is tied in with S&D, to use the same consider/scan command for both of 
 S&D history with context menu report
 
 <img width="1249" height="389" alt="2026-04-16 22_49_26-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/6cd23a9c-4ae9-425f-8efe-a440c73f0610" />
+<img width="1248" height="408" alt="2026-04-16 22_51_31-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/177cefa2-5785-42e1-af1e-ec4df424acd2" />
+
 
 
 A few Mmapper screenshots:
