@@ -144,8 +144,9 @@ A few screenshots on S&D and Mmapper in action!
 S&D main window:
 
 <img width="457" height="508" alt="2026-04-15 19_45_50-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/f4abf9ef-7864-41f6-865c-112438815807" />
-<img width="460" height="509" alt="2026-04-12 21_56_29-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/bd8fa262-bb50-45d0-87cf-ae31772a3542" />
-<img width="456" height="508" alt="2026-04-12 21_57_06-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/951bfb21-4f89-4993-b0c8-e7336d69a115" />
+<img width="455" height="505" alt="2026-04-16 22_54_11-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/7fe7463e-e443-4759-8a0c-d07a05740c15" />
+<img width="460" height="509" alt="2026-04-12 21_56_29-Aardwolf - Mudlet 4 20 1" src="https://github.com/user-attachments/assets/faac419a-dd11-41b5-ace4-22432f46d111" />
+
 
 Yes, S&D is multi window now. It transitions from window to window based on priority GQ -> quest -> CP. Clicking on a tab will manually change windows. All buttons are scoped for the selected window. i.e. xcp 1 will select first mob in quest window -> change window to cp, xcp 1 will select first cp monster etc
 
