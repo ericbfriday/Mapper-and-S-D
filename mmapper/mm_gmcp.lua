@@ -567,9 +567,13 @@ end
 function mm.on_coords_line()
   if not matches then return end
   mm.runtime = mm.runtime or {}
-  mm.runtime.last_coords_x = tonumber(matches[2])
-  mm.runtime.last_coords_y = tonumber(matches[3])
-  mm.runtime.last_coords_z = tonumber(matches[4])
+  local payload = tostring(matches[2] or "")
+  local cx, cy, cz = payload:match("^%s*(-?%d+),(-?%d+),(-?%d+)%s*$")
+  if cx and cy and cz then
+    mm.runtime.last_coords_x = tonumber(cx)
+    mm.runtime.last_coords_y = tonumber(cy)
+    mm.runtime.last_coords_z = tonumber(cz)
+  end
   if type(deleteLine) == "function" then deleteLine() end
 
   -- Aardwolf "look" may not emit a fresh gmcp.room.info event for current room.
@@ -638,7 +642,7 @@ function mm.register_events()
   -- Disabled: this generic pattern also matches combat lines like "[1] ...",
   -- which can cause incorrect room sync. Prefer gmcp.room.info as source of truth.
   mm._room_vnum_trigger = nil
-  mm._coords_trigger = tempRegexTrigger("^\\{coords\\}(-?\\d+),(-?\\d+),(-?\\d+)$", "mm.on_coords_line()")
+  mm._coords_trigger = tempRegexTrigger("^\\{coords\\}(.*)$", "mm.on_coords_line()")
   mm._roomchars_open_trigger = tempTrigger("{roomchars}", "mm.on_tag_line()")
   mm._roomchars_close_trigger = tempTrigger("{/roomchars}", "mm.on_tag_line()")
   mm._roomobjs_open_trigger = tempTrigger("{roomobjs}", "mm.on_tag_line()")
