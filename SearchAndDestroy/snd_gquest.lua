@@ -277,9 +277,15 @@ function snd.gq.buildMainTargetList()
     end
     snd.targets.list = newList
     
-    -- Insert GQ targets at the BEGINNING (highest priority)
-    for i = #snd.gquest.targets, 1, -1 do
-        local target = snd.gquest.targets[i]
+    local duplicateCounts = {}
+    for _, t in ipairs(snd.gquest.targets) do
+        local k = string.format("%s|%s|%s", tostring(t.mob or ""):lower(), tostring(t.arid or ""):lower(), tostring(t.loc or ""):lower())
+        duplicateCounts[k] = (duplicateCounts[k] or 0) + 1
+    end
+    local gqEntries = {}
+
+    -- Build entries in display order first, then prepend as a block.
+    for i, target in ipairs(snd.gquest.targets) do
         local roomName = ""
         if snd.gquest.targetType == "room" and target.loc and target.loc ~= "" then
             roomName = target.loc
@@ -303,7 +309,34 @@ function snd.gq.buildMainTargetList()
             keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, ""),
             hasMobData = hasMobData,
         }
-        table.insert(snd.targets.list, 1, entry)
+        local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, target.arid) or nil
+        if tags then
+            entry.nowhere = tags.nowhere
+            entry.nohunt = tags.nohunt
+            entry.priority_room = tags.priority_room
+        end
+        if not entry.nowhere then
+            local dk = string.format("%s|%s|%s", tostring(target.mob or ""):lower(), tostring(target.arid or ""):lower(), tostring(target.loc or ""):lower())
+            entry._dupkey = dk
+            entry.duplicates = duplicateCounts[dk] or 1
+            if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
+                entry.rmid = tonumber(entry.priority_room)
+            end
+            table.insert(gqEntries, entry)
+        end
+    end
+
+    local duplicateIndexSeen = {}
+    for _, entry in ipairs(gqEntries) do
+        local dk = entry._dupkey or ""
+        duplicateIndexSeen[dk] = (duplicateIndexSeen[dk] or 0) + 1
+        entry.index = duplicateIndexSeen[dk]
+        entry._dupkey = nil
+    end
+
+    -- Insert GQ targets at the BEGINNING (highest priority) preserving gqEntries order.
+    for i = #gqEntries, 1, -1 do
+        table.insert(snd.targets.list, 1, gqEntries[i])
     end
     
     snd.utils.debugNote("Built GQ target list: " .. #snd.gquest.targets .. " targets (priority)")
@@ -311,13 +344,17 @@ end
 
 --- Update target status from gq check results
 function snd.gq.updateTargetStatus()
+    local consumedChecks = {}
     for _, target in ipairs(snd.targets.list) do
         if target.activity == "gq" then
             -- Check if this target is in the check list
             local found = false
-            for _, check in ipairs(snd.gquest.checkList) do
-                if target.mob == check.mob then
+            for idx, check in ipairs(snd.gquest.checkList) do
+                if not consumedChecks[idx]
+                    and target.mob == check.mob
+                    and ((target.loc or "") == (check.loc or "") or (check.loc or "") == "" or (target.loc or "") == "") then
                     found = true
+                    consumedChecks[idx] = true
                     target.remaining = check.remaining
                     target.dead = check.remaining == 0 or check.dead
                     break
@@ -391,13 +428,30 @@ function snd.gq.onMobKilled()
     
     -- Update remaining count for current target
     if snd.targets.current and snd.targets.current.activity == "gq" then
-        for _, t in ipairs(snd.targets.list) do
-            if t.activity == "gq" and t.mob == snd.targets.current.name then
-                t.remaining = math.max(0, (t.remaining or 1) - 1)
-                if t.remaining == 0 then
-                    t.dead = true
+        local bestIndex, bestScore = nil, -1
+        local currentArea = snd.room and snd.room.current and tostring(snd.room.current.arid or "") or ""
+        local currentRoom = snd.room and snd.room.current and tostring(snd.room.current.name or "") or ""
+        for i, t in ipairs(snd.targets.list) do
+            if t.activity == "gq" and not t.dead then
+                if t.mob == snd.targets.current.name then
+                    local score = 5
+                    if t.arid and currentArea ~= "" and tostring(t.arid) == currentArea then score = score + 3 end
+                    if t.roomName and currentRoom ~= "" and tostring(t.roomName) == currentRoom then score = score + 2 end
+                    if snd.targets.current.index and t.index and tonumber(snd.targets.current.index) == tonumber(t.index) then
+                        score = score + 1
+                    end
+                    if score > bestScore then
+                        bestScore = score
+                        bestIndex = i
+                    end
                 end
-                break
+            end
+        end
+        if bestIndex and snd.targets.list[bestIndex] then
+            local t = snd.targets.list[bestIndex]
+            t.remaining = math.max(0, (t.remaining or 1) - 1)
+            if t.remaining == 0 then
+                t.dead = true
             end
         end
     end
@@ -407,15 +461,6 @@ function snd.gq.onMobKilled()
         send("gq check", false)
     end)
 
-    if snd.db and snd.targets.current and snd.room.current.rmid then
-        snd.db.recordMobKill(
-            snd.targets.current.name,
-            snd.room.current.rmid,
-            snd.room.current.name,
-            snd.room.current.arid
-        )
-    end
-    
     if snd.gui and snd.gui.refresh then
         snd.gui.refresh()
     end
@@ -557,6 +602,7 @@ function snd.gq.selectTarget(index)
         keyword = target.keyword,
         name = target.mob,
         roomName = target.roomName or "",
+        roomId = target.rmid,
         area = target.arid or target.loc,
         areaName = target.loc or "",
         index = index,

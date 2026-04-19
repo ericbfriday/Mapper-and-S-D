@@ -359,6 +359,27 @@ end
 
 function snd.commands.xcp(args)
     args = snd.utils.trim(args or "")
+
+    local modeArg = args:match("^mode%s*(.*)$")
+    if modeArg ~= nil then
+        local normalized = snd.utils.trim(modeArg or ""):lower()
+        local options = {
+            ht = "ht - do hunt trick",
+            qw = "qw - do quick where",
+            off = "off - no additional action",
+        }
+        if normalized == "" then
+            snd.utils.infoNote("Current 'xcp' mode: " .. (options[snd.config.xcpActionMode or "qw"] or options.qw) .. ".")
+            snd.utils.infoNote("Syntax: xcp mode <ht|qw|off>")
+        elseif options[normalized] then
+            snd.config.xcpActionMode = normalized
+            snd.utils.infoNote("Set 'xcp' mode to: " .. options[normalized] .. ".")
+            snd.saveState()
+        else
+            snd.utils.infoNote("Invalid xcp mode. Syntax: xcp mode <ht|qw|off>")
+        end
+        return
+    end
     
     if args == "" then
         -- Show current target and list
@@ -762,11 +783,12 @@ end
 -- qw - Quick Where
 -------------------------------------------------------------------------------
 
-function snd.commands.qw(args)
+local function runQuickWhere(args, exact)
     args = snd.utils.trim(args or "")
 
     local keyword = args
     local rawKeyword = keyword
+    local exactNameHint = ""
     local startIndex = 1
 
     local prefixedIndex, prefixedKeyword = keyword:match("^(%d+)%.(.+)$")
@@ -784,6 +806,7 @@ function snd.commands.qw(args)
         for _, target in ipairs(snd.targets.list or {}) do
             if target.activity == "cp" and not target.dead and target.keyword and target.keyword ~= "" then
                 keyword = target.keyword
+                exactNameHint = target.mob or ""
                 break
             end
         end
@@ -791,11 +814,13 @@ function snd.commands.qw(args)
         for _, target in ipairs(snd.targets.list or {}) do
             if target.activity == "gq" and not target.dead and target.keyword and target.keyword ~= "" then
                 keyword = target.keyword
+                exactNameHint = target.mob or ""
                 break
             end
         end
     elseif lowered == "quest_target" and snd.quest and snd.quest.target then
         keyword = snd.quest.target.keyword or ""
+        exactNameHint = snd.quest.target.mob or ""
     end
 
     local scopedActivity = getScopedActivity()
@@ -813,8 +838,12 @@ function snd.commands.qw(args)
         end
         if snd.targets.current and snd.targets.current.keyword then
             keyword = snd.targets.current.keyword
+            if snd.targets.current.name and snd.targets.current.name ~= "" then
+                exactNameHint = snd.targets.current.name
+            end
         elseif snd.quest and snd.quest.active and snd.quest.target and snd.quest.target.keyword and snd.quest.target.keyword ~= "" then
             keyword = snd.quest.target.keyword
+            exactNameHint = snd.quest.target.mob or exactNameHint
         else
             snd.utils.infoNote("No target selected. Usage: qw <keyword>")
             return
@@ -835,10 +864,26 @@ function snd.commands.qw(args)
         snd.nav.quickWhere.lastMatch = nil
         snd.nav.quickWhere.pendingMatches = {}
         snd.nav.quickWhere.processed = false
+        snd.nav.quickWhere.isAdhoc = isAdhocQw
         snd.nav.quickWhere.requestedKeyword = keyword
         snd.nav.quickWhere.lookupKeyword = keyword
         snd.nav.quickWhere.index = startIndex
-        snd.nav.quickWhere.exact = false
+        snd.nav.quickWhere.exact = exact == true
+        if exact then
+            local exactText = ""
+            if isAdhocQw then
+                exactText = keyword
+            elseif exactNameHint ~= "" then
+                exactText = exactNameHint
+            elseif snd.targets and snd.targets.current and snd.targets.current.name and snd.targets.current.name ~= "" then
+                exactText = snd.targets.current.name
+            else
+                exactText = keyword
+            end
+            snd.nav.quickWhere.exactMatchText = exactText
+        else
+            snd.nav.quickWhere.exactMatchText = nil
+        end
         snd.nav.quickWhere.scope = scopedActivity or (snd.targets.current and snd.targets.current.activity) or "unknown"
         if snd.nav.quickWhere.processTimer then
             killTimer(snd.nav.quickWhere.processTimer)
@@ -861,6 +906,14 @@ function snd.commands.qw(args)
             snd.triggers.disableQuickWhereTriggers()
         end
     end)
+end
+
+function snd.commands.qw(args)
+    runQuickWhere(args, false)
+end
+
+function snd.commands.qwx(args)
+    runQuickWhere(args, true)
 end
 
 local function resolveQuickWhereAreaKey()
@@ -905,10 +958,23 @@ function snd.commands.processQuickWhereResult()
 
     snd.targets = snd.targets or {}
     snd.targets.current = snd.targets.current or {}
+    local preservedActivity = snd.targets.current.activity
+    local quickWhereScope = quickWhere.scope
+    local isAdhocQuickWhere = quickWhere.isAdhoc == true
+    local originalName = snd.utils.trim(snd.targets.current.name or "")
+    local matchedName = snd.utils.trim(lastMatch.mob or "")
+    local hasStableIdentity = (originalName == "" or matchedName == "")
+        or (originalName:lower() == matchedName:lower())
+    local nextActivity = "qw"
+    if hasStableIdentity and (not isAdhocQuickWhere) and (quickWhereScope == "cp" or quickWhereScope == "gq" or quickWhereScope == "quest") then
+        nextActivity = quickWhereScope
+    elseif hasStableIdentity and (not isAdhocQuickWhere) and (preservedActivity == "cp" or preservedActivity == "gq" or preservedActivity == "quest") then
+        nextActivity = preservedActivity
+    end
     snd.targets.current.name = lastMatch.mob or snd.targets.current.name
     snd.targets.current.keyword = snd.utils.findKeyword(lastMatch.mob or snd.targets.current.name or "")
     snd.targets.current.matchedMobName = lastMatch.mob or snd.targets.current.matchedMobName
-    snd.targets.current.activity = "qw"
+    snd.targets.current.activity = nextActivity
     snd.targets.current.roomName = lastMatch.room or snd.targets.current.roomName
 
     local areaKey = resolveQuickWhereAreaKey()
@@ -1174,6 +1240,174 @@ function snd.commands.stopHunt(silent)
     if not silent then
         snd.utils.infoNote("Hunt stopped")
     end
+end
+
+-------------------------------------------------------------------------------
+-- ah - Auto Hunt
+-------------------------------------------------------------------------------
+
+local function ensureAutoHuntStore()
+    snd.nav = snd.nav or {}
+    snd.nav.autoHunt = snd.nav.autoHunt or {}
+    snd.nav.autoHunt.tempTriggers = snd.nav.autoHunt.tempTriggers or {}
+end
+
+local function clearAutoHuntTriggers()
+    ensureAutoHuntStore()
+    for _, id in ipairs(snd.nav.autoHunt.tempTriggers) do
+        pcall(killTrigger, id)
+    end
+    snd.nav.autoHunt.tempTriggers = {}
+end
+
+local function addAutoHuntTrigger(regex, fn)
+    ensureAutoHuntStore()
+    local id = tempRegexTrigger(regex, fn)
+    if id then
+        table.insert(snd.nav.autoHunt.tempTriggers, id)
+    end
+end
+
+function snd.commands.stopAutoHunt(silent)
+    ensureAutoHuntStore()
+    snd.nav.autoHunt.active = false
+    snd.nav.autoHunt.keyword = ""
+    snd.nav.autoHunt.direction = ""
+    snd.nav.autoHunt.lastDirection = ""
+    snd.nav.autoHunt.awaitingHuntResult = false
+    snd.nav.autoHunt.transitioning = false
+    clearAutoHuntTriggers()
+    if not silent then
+        snd.utils.infoNote("Search and Destroy:  Auto-hunt cancelled.")
+    end
+end
+
+function snd.commands.autoHuntNext(direction)
+    if not (snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active) then
+        return
+    end
+    if not snd.nav.autoHunt.awaitingHuntResult then
+        return
+    end
+    if snd.nav.autoHunt.transitioning then
+        return
+    end
+    local dir = snd.utils.trim(direction or ""):lower()
+    if dir == "" then return end
+    snd.nav.autoHunt.awaitingHuntResult = false
+    snd.nav.autoHunt.transitioning = true
+    snd.nav.autoHunt.direction = dir
+    snd.nav.autoHunt.lastDirection = dir
+    snd.commands.sendGameCommand(dir, false)
+    if snd.nav.autoHunt.keyword and snd.nav.autoHunt.keyword ~= "" then
+        tempTimer(0.15, function()
+            if not (snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active) then
+                return
+            end
+            snd.nav.autoHunt.transitioning = false
+            snd.nav.autoHunt.awaitingHuntResult = true
+            snd.commands.sendGameCommand("hunt " .. snd.nav.autoHunt.keyword, false)
+        end)
+    else
+        snd.nav.autoHunt.transitioning = false
+    end
+end
+
+function snd.commands.autoHuntDoor()
+    if not (snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active) then
+        return
+    end
+    local dir = snd.nav.autoHunt.lastDirection or snd.nav.autoHunt.direction
+    if dir and dir ~= "" then
+        snd.commands.sendGameCommand("open " .. dir, false)
+        tempTimer(0.2, function()
+            snd.commands.autoHuntNext(dir)
+        end)
+    end
+end
+
+function snd.commands.autoHuntComplete()
+    snd.commands.stopAutoHunt(true)
+    snd.utils.infoNote("Search and Destroy: Auto-hunt complete.")
+end
+
+function snd.commands.autoHuntLowskill()
+    snd.utils.infoNote("Search and Destroy:  Autohunt not available - hunt skill is too low.")
+    snd.commands.stopAutoHunt(true)
+end
+
+function snd.commands.autoHuntPortal()
+    snd.utils.infoNote("Search and Destroy: Auto-hunt through portals not supported yet. Enter portal manually and retry.")
+    snd.commands.stopAutoHunt(true)
+end
+
+function snd.commands.enableAutoHunt()
+    clearAutoHuntTriggers()
+    addAutoHuntTrigger("^You are (?:almost )?certain that .+ is (north|south|east|west|up|down) from here\\.$", function()
+        local dir = matches and matches[2] or ""
+        snd.commands.autoHuntNext(dir)
+    end)
+    addAutoHuntTrigger("^You are confident that .+ passed through here, heading (north|south|east|west|up|down)\\.$", function()
+        local dir = matches and matches[2] or ""
+        snd.commands.autoHuntNext(dir)
+    end)
+    addAutoHuntTrigger("^.+ is here!$", function() snd.commands.autoHuntComplete() end)
+    addAutoHuntTrigger("^The trail of .+ is confusing, but you're reasonably sure .+ headed (?:north|south|east|west|up|down)\\.$|^There are traces of .+ having been here\\. Perhaps they lead (?:north|south|east|west|up|down)\\?$|^You have no idea what you're doing, but maybe .+ is (?:north|south|east|west|up|down)\\?$", function() snd.commands.autoHuntLowskill() end)
+    addAutoHuntTrigger("^You are (?:almost )?certain that .+ is through .+\\.$|^You are confident that .+ passed through here, heading through .+\\.$|^The trail of .+ is confusing, but you're reasonably sure .+ headed through .+\\.$|^There are traces of .+ having been here\\. Perhaps they lead through .+\\?$|^You have no idea what you're doing, but maybe .+ is through .+\\?$", function() snd.commands.autoHuntPortal() end)
+    addAutoHuntTrigger("^Magical wards around .+ bounce you back\\.$|^The .+ is closed\\.$", function() snd.commands.autoHuntDoor() end)
+    addAutoHuntTrigger("^No one in this area by the name '.+'\\.$|^You couldn't find a path to .+ from here\\.$|^No one in this area by that name\\.$|^Not while you are fighting!$|^You can't hunt while (?:resting|sitting)\\.$|^You dream about going on a nice hunting trip, with pony rides, and campfires too\\.$|^You do not have a key for .+\\.$", function() snd.commands.stopAutoHunt(true) end)
+end
+
+function snd.commands.ah(args)
+    args = snd.utils.trim(args or "")
+    local lowered = args:lower()
+    if lowered == "a" or lowered == "abort" or lowered == "cancel" or lowered == "stop" or lowered == "0" then
+        snd.commands.stopAutoHunt()
+        return
+    end
+    local explicitKeywordProvided = args ~= ""
+
+    local keyword = args
+    if keyword == "" then
+        keyword = snd.targets and snd.targets.current and snd.targets.current.keyword or ""
+    end
+    if keyword == "" then
+        snd.utils.infoNote("No target selected. Usage: ah <keyword>")
+        return
+    end
+
+    ensureAutoHuntStore()
+    if snd.targets and snd.targets.current and snd.targets.current.activity and (snd.targets.current.activity == "cp" or snd.targets.current.activity == "gq") then
+        local currentKeyword = snd.utils.trim(snd.targets.current.keyword or ""):lower()
+        local currentNameKeyword = snd.utils.trim(snd.utils.findKeyword(snd.targets.current.name or "") or ""):lower()
+        local requestedKeyword = snd.utils.trim(keyword or ""):lower()
+        local guardApplies = not explicitKeywordProvided
+            or (requestedKeyword ~= "" and (requestedKeyword == currentKeyword or requestedKeyword == currentNameKeyword))
+        if guardApplies then
+            local zone = snd.utils.trim(snd.targets.current.area or "")
+            if zone == "" then
+                zone = snd.utils.trim(snd.targets.current.arid or "")
+            end
+            if zone == "" then
+                zone = snd.utils.trim((snd.room and snd.room.current and snd.room.current.arid) or "")
+            end
+            local mobName = snd.targets.current.name or ""
+            local tags = (snd.db and snd.db.getMobTags and mobName ~= "" and zone ~= "") and snd.db.getMobTags(mobName, zone) or nil
+            if tags and tags.nohunt then
+                snd.utils.infoNote("Auto-hunt skipped: current target is tagged 'nohunt' for this zone.")
+                return
+            end
+        end
+    end
+    snd.commands.stopHunt(true)
+    snd.commands.enableAutoHunt()
+    snd.nav.autoHunt.active = true
+    snd.nav.autoHunt.keyword = keyword
+    snd.nav.autoHunt.direction = ""
+    snd.nav.autoHunt.lastDirection = ""
+    snd.nav.autoHunt.awaitingHuntResult = true
+    snd.nav.autoHunt.transitioning = false
+    snd.commands.sendGameCommand("hunt " .. keyword, false)
 end
 
 -------------------------------------------------------------------------------
@@ -1490,14 +1724,14 @@ function snd.commands.xset(args)
         end
         
     elseif setting == "nxaction" then
-        local valid = {smartscan = true, con = true, scan = true, qs = true, none = true}
+        local valid = {smartscan = true, con = true, scan = true, scanhere = true, qs = true, none = true}
         if not normalized or normalized == "" then
             snd.utils.infoNote("Next action: " .. snd.config.nxAction)
         elseif valid[normalized] then
             snd.config.nxAction = normalized
             snd.utils.infoNote("Next action: " .. snd.config.nxAction)
         else
-            snd.utils.infoNote("Usage: xset nxaction <smartscan|con|scan|qs|none>")
+            snd.utils.infoNote("Usage: xset nxaction <smartscan|con|scan|scanhere|qs|none>")
             return
         end
         
@@ -1582,6 +1816,83 @@ function snd.commands.xset(args)
             snd.utils.infoNote("Usage: xset startroom <roomid> [area]")
         end
         
+    elseif setting == "mob" then
+        local sub = parts[2] and parts[2]:lower() or ""
+        local zone = snd.room and snd.room.current and snd.room.current.arid or ""
+        local mob = table.concat(parts, " ", 3)
+        local function needMob()
+            if mob == "" then
+                snd.utils.infoNote("Usage: xset mob " .. sub .. " <mob name>")
+                return false
+            end
+            return true
+        end
+
+        if sub == "nowhere" then
+            if not needMob() then return end
+            local on = snd.db.toggleMobTag(mob, zone, "nowhere")
+            snd.utils.infoNote("Mob '" .. mob .. "' nowhere flag: " .. ((on and "ON") or "OFF"))
+        elseif sub == "nohunt" then
+            if not needMob() then return end
+            local on = snd.db.toggleMobTag(mob, zone, "nohunt")
+            snd.utils.infoNote("Mob '" .. mob .. "' nohunt flag: " .. ((on and "ON") or "OFF"))
+        elseif sub == "priority" then
+            if not needMob() then return end
+            local roomId = tonumber(snd.room and snd.room.current and snd.room.current.rmid)
+            if not roomId or roomId <= 0 then
+                snd.utils.infoNote("Current room id is unknown; cannot set priority.")
+                return
+            end
+            snd.db.setMobPriorityRoom(mob, zone, roomId)
+            snd.utils.infoNote("Mob '" .. mob .. "' priority room set to " .. tostring(roomId))
+        elseif sub == "unpriority" then
+            if not needMob() then return end
+            snd.db.setMobPriorityRoom(mob, zone, nil)
+            snd.utils.infoNote("Mob '" .. mob .. "' priority room cleared.")
+        elseif sub == "clearflags" then
+            if not needMob() then return end
+            snd.db.clearMobTags(mob, zone)
+            snd.utils.infoNote("Cleared all tags for '" .. mob .. "' in zone " .. tostring(zone))
+        elseif sub == "tags" or sub == "tag" then
+            local query = table.concat(parts, " ", 3)
+            local rows = snd.db.listMobTags(nil, query ~= "" and query or nil)
+            snd.commands._lastMobTagRows = rows
+            if #rows == 0 then
+                snd.utils.infoNote("No mob tags found.")
+                return
+            end
+            cecho("\n<white>#   Zone       Mob                               nowhere nohunt priority<reset>\n")
+            cecho("<gray>-------------------------------------------------------------------------------<reset>\n")
+            for i, row in ipairs(rows) do
+                cecho(string.format("<cyan>%-3d<reset> %-10s %-32s %-7s %-6s %s\n",
+                    i,
+                    tostring(row.zone or ""):sub(1, 10),
+                    tostring(row.mob or ""):sub(1, 32),
+                    row.nowhere and "yes" or "-",
+                    row.nohunt and "yes" or "-",
+                    row.priority_room and tostring(row.priority_room) or "-"
+                ))
+            end
+        elseif sub == "delete" or sub == "del" then
+            local idx = tonumber(parts[3] or "")
+            if not idx then
+                snd.utils.infoNote("Usage: xset mob delete <index> (use xset mob tags first)")
+                return
+            end
+            local row = snd.commands._lastMobTagRows and snd.commands._lastMobTagRows[idx] or nil
+            if not row then
+                snd.utils.infoNote("No tag row cached at that index.")
+                return
+            end
+            if snd.db.deleteMobTagById(row.id) then
+                snd.utils.infoNote("Deleted mob tag #" .. tostring(idx) .. " (" .. tostring(row.mob) .. ")")
+            else
+                snd.utils.infoNote("Failed deleting mob tag #" .. tostring(idx))
+            end
+        else
+            snd.utils.infoNote("Usage: xset mob <nowhere|nohunt|priority|unpriority|tags|clearflags|delete>")
+            return
+        end
     else
         snd.utils.infoNote("Unknown setting: " .. setting)
         snd.commands.showConfig()
@@ -1675,11 +1986,14 @@ function snd.commands.showHelp()
     cecho("<yellow>Targeting & Combat<reset>\n")
     cecho("  "); emitHelpCommandLink("xcp <n>", "xcp 1", "Select target by number"); cecho("       - Select target by number\n")
     cecho("  "); emitHelpCommandLink("xcp", "xcp", "Show clickable target list"); cecho("           - Show clickable target list\n")
+    cecho("  "); emitHelpCommandLink("xcp mode <ht|qw|off>", "xcp mode", "Set post-xcp action mode"); cecho(" - Set post-xcp action\n")
     cecho("  "); emitHelpCommandLink("nx", "nx", "Go to next/current target"); cecho("            - Go to next/current target\n")
     cecho("  "); emitHelpCommandLink("xkill", "xkill", "Kill current target"); cecho("         - Kill current target\n")
     cecho("\n<yellow>Navigation & Search<reset>\n")
     cecho("  "); emitHelpCommandLink("qw [mob]", "qw", "Quick where"); cecho("      - Quick where (find mob)\n")
+    cecho("  "); emitHelpCommandLink("qwx [mob]", "qwx", "Quick where exact"); cecho("    - Quick where exact match\n")
     cecho("  "); emitHelpCommandLink("ht [mob]", "ht", "Hunt trick"); cecho("      - Hunt trick (track mob)\n")
+    cecho("  "); emitHelpCommandLink("ah [mob]", "ah", "Auto hunt"); cecho("       - Auto-hunt loop\n")
     cecho("  "); emitHelpCommandLink("xrt <area|roomid>", "xhelp commands", "See xrt help"); cecho(" - Navigate via mapper pathing\n")
     cecho("  "); emitHelpCommandLink("walkto <area|roomid>", "xhelp commands", "See walkto help"); cecho(" - Walk only (no portals/recalls)\n")
     cecho("\n<yellow>Windows & UI<reset>\n")
@@ -1820,15 +2134,18 @@ function snd.commands.showConfigHelp()
     cecho("                Error notes still show.\n")
     cecho("  <cyan>speed<reset>        <run|walk>  Default travel mode for nx/go\n")
     cecho("                run=xrt (portal-aware), walk=walkto (no portals)\n")
-    cecho("  <cyan>nxaction<reset>     <smartscan|con|scan|qs|none>\n")
+    cecho("  <cyan>nxaction<reset>     <smartscan|con|scan|scanhere|qs|none>\n")
     cecho("                default   = qs\n")
     cecho("                smartscan = local smart scan routine (scan for activity targets; fallback to quick scan when none)\n")
     cecho("                con       = send 'con'\n")
     cecho("                scan      = send 'scan'\n")
+    cecho("                scanhere  = send 'scan here'\n")
     cecho("                qs        = scan current target keyword (or plain scan)\n")
     cecho("                none      = do nothing on arrival\n")
     cecho("  <cyan>express<reset>      <on|off>  Prefer known fixed-room targets\n")
     cecho("  <cyan>expressmin<reset>   <number>  Min kills before express applies\n")
+    cecho("  <cyan>xcp mode<reset>     <ht|qw|off>  Action after arriving for cp/gq targets\n")
+    cecho("  <cyan>mob tags<reset>     xset mob tags|delete|nowhere|nohunt|priority\n")
     cecho("  <cyan>window<reset>       on/off - GUI window\n")
     cecho("  <cyan>sound<reset>        on/off - Sound alerts (quest-ready, etc)\n")
     cecho("<gray>----------------------------------------<reset>\n")
@@ -1882,11 +2199,14 @@ function snd.commands.registerTempAliases()
     register("snd", "^snd(.*)$", function() snd.commands.snd(matches[2]) end)
     register("xhelp", "^xhelp(.*)$", function() snd.commands.xhelp(matches[2]) end)
     register("xcp", "^xcp(.*)$", function() snd.commands.xcp(matches[2]) end)
-    register("qw", "^qw(.*)$", function() snd.commands.qw(matches[2]) end)
+    register("qwx", "^qwx(?:\\s+(.*))?$", function() snd.commands.qwx(matches[2] or "") end)
+    register("qw", "^qw(?:\\s+(.*))?$", function() snd.commands.qw(matches[2] or "") end)
     register("nx", "^nx$", function() snd.commands.nx() end)
     register("ht", "^ht(.*)$", function() snd.commands.ht(matches[2]) end)
+    register("ah", "^ah(.*)$", function() snd.commands.ah(matches[2]) end)
+    register("aha", "^(?:aha|ah0)$", function() snd.commands.stopAutoHunt() end)
     register("xset", "^xset(.*)$", function() snd.commands.xset(matches[2]) end)
-    register("go", "^go(.*)$", function() snd.commands.goToIndex(matches[2]) end)
+    register("go", "^go(\\s+.*)?$", function() snd.commands.goToIndex(matches[2]) end)
     register("qref", "^qref$", function() snd.commands.qref() end)
     register("xkill", "^xkill$", function() snd.commands.xkill() end)
     register("xcmd", "^xcmd(.*)$", function() snd.commands.xcmd(matches[2]) end)
@@ -1902,6 +2222,7 @@ function snd.commands.showConfig()
     cecho(string.format("  <cyan>silent<reset>      %s\n", snd.config.silentMode and "ON" or "OFF"))
     cecho(string.format("  <cyan>speed<reset>       %s\n", snd.config.speed))
     cecho(string.format("  <cyan>nxaction<reset>    %s\n", snd.config.nxAction))
+    cecho(string.format("  <cyan>xcpmode<reset>     %s\n", snd.config.xcpActionMode or "qw"))
     cecho(string.format("  <cyan>express<reset>     %s\n", snd.config.express.enabled and "ON" or "OFF"))
     cecho(string.format("  <cyan>expressmin<reset>  %d\n", snd.config.express.minKillCount))
     cecho(string.format("  <cyan>window<reset>      %s\n", snd.config.window.enabled and "ON" or "OFF"))

@@ -837,12 +837,31 @@ if not snd or not snd.commands then
     cecho("<red>[S&D ERROR]<reset> Module not loaded. Type <green>sndpath<reset> to diagnose.\n")
     return
 end
-snd.commands.qw(matches[2])
+snd.commands.qw(matches[2] or "")
 ]]></script>
                 <command></command>
                 <packageName></packageName>
                 <regexCodeList>
-                    <string>^qw(.*)$</string>
+                    <string>^qw(?:\s+(.*))?$</string>
+                </regexCodeList>
+                <regexCodePropertyList>
+                    <integer>1</integer>
+                </regexCodePropertyList>
+            </Alias>
+            
+            <!-- qwx - quick where exact -->
+            <Alias isActive="yes" name="qwx">
+                <script><![CDATA[
+if not snd or not snd.commands then
+    cecho("<red>[S&D ERROR]<reset> Module not loaded. Type <green>sndpath<reset> to diagnose.\n")
+    return
+end
+snd.commands.qwx(matches[2] or "")
+]]></script>
+                <command></command>
+                <packageName></packageName>
+                <regexCodeList>
+                    <string>^qwx(?:\s+(.*))?$</string>
                 </regexCodeList>
                 <regexCodePropertyList>
                     <integer>1</integer>

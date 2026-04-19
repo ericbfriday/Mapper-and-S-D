@@ -29,6 +29,10 @@ snd.db.seenCache = snd.db.seenCache or {}
 snd.db.seenCacheLastPrune = snd.db.seenCacheLastPrune or 0
 snd.db.seenCooldownSeconds = 300       -- 5 minutes
 snd.db.seenCacheMaxAgeSeconds = 3600   -- 1 hour
+snd.db.killCache = snd.db.killCache or {}
+snd.db.killCacheLastPrune = snd.db.killCacheLastPrune or 0
+snd.db.killCooldownSeconds = 3          -- dedupe duplicate kill events for same mob+room
+snd.db.killCacheMaxAgeSeconds = 30      -- short-lived kill dedupe cache
 
 -- Database file path - UPDATE THIS to your actual database location
 -- Common locations:
@@ -95,6 +99,12 @@ function snd.db.clearSeenCache()
     snd.db.seenCacheLastPrune = os.time()
 end
 
+--- Clear in-memory kill dedupe cache.
+function snd.db.clearKillCache()
+    snd.db.killCache = {}
+    snd.db.killCacheLastPrune = os.time()
+end
+
 --- Prune seen cache entries older than max age.
 function snd.db.pruneSeenCache(now)
     now = tonumber(now) or os.time()
@@ -105,6 +115,18 @@ function snd.db.pruneSeenCache(now)
         end
     end
     snd.db.seenCacheLastPrune = now
+end
+
+--- Prune kill cache entries older than max age.
+function snd.db.pruneKillCache(now)
+    now = tonumber(now) or os.time()
+    local maxAge = tonumber(snd.db.killCacheMaxAgeSeconds) or 30
+    for key, ts in pairs(snd.db.killCache or {}) do
+        if (now - (tonumber(ts) or 0)) > maxAge then
+            snd.db.killCache[key] = nil
+        end
+    end
+    snd.db.killCacheLastPrune = now
 end
 
 --- Ensure campaign Complete-By identity mapping table exists.
@@ -130,6 +152,32 @@ function snd.db.ensureCampaignIdentityTable()
     return true
 end
 
+--- Ensure mob tag table exists.
+function snd.db.ensureMobTagsTable()
+    if not snd.db.isOpen then
+        if not snd.db.open() then
+            return false
+        end
+    end
+
+    local ok = snd.db.execute([[
+        CREATE TABLE IF NOT EXISTS mob_tags (
+            id INTEGER PRIMARY KEY,
+            mob TEXT NOT NULL COLLATE NOCASE,
+            zone TEXT NOT NULL COLLATE NOCASE,
+            nowhere INTEGER NOT NULL DEFAULT 0,
+            nohunt INTEGER NOT NULL DEFAULT 0,
+            priority_room INTEGER DEFAULT NULL,
+            UNIQUE(mob, zone)
+        )
+    ]])
+    if not ok then return false end
+    snd.db.execute("CREATE INDEX IF NOT EXISTS idx_mob_tags_zone ON mob_tags(zone)")
+    snd.db.execute("CREATE INDEX IF NOT EXISTS idx_mob_tags_mob ON mob_tags(mob)")
+    snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mob_tags_key_nocase ON mob_tags(lower(mob), lower(zone))")
+    return true
+end
+
 --- Initialize the database
 function snd.db.initialize(silent)
     if not silent then
@@ -140,6 +188,7 @@ function snd.db.initialize(silent)
         return false
     end
     snd.db.clearSeenCache()
+    snd.db.clearKillCache()
     
     -- Verify tables exist
     local tables = snd.db.getTables()
@@ -148,6 +197,9 @@ function snd.db.initialize(silent)
     end
 
     snd.db.ensureCampaignIdentityTable()
+    snd.db.ensureMobTagsTable()
+    snd.db.normalizeMobTagRows()
+    snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mob_tags_key_nocase ON mob_tags(lower(mob), lower(zone))")
     
     -- Get stats
     local stats = snd.db.getStats()
@@ -157,6 +209,180 @@ function snd.db.initialize(silent)
     end
     
     return true
+end
+
+local function normalizeMobTagZone(zone)
+    local fallbackZone = (snd.room and snd.room.current and snd.room.current.arid) or ""
+    return tostring(zone or fallbackZone):lower()
+end
+
+local function normalizeMobTagName(mobName)
+    local raw = snd.utils and snd.utils.trim(tostring(mobName or "")) or tostring(mobName or "")
+    return raw:lower()
+end
+
+function snd.db.normalizeMobTagRows()
+    if not snd.db.ensureMobTagsTable() then return false end
+    local rows = snd.db.query("SELECT id, mob, zone, nowhere, nohunt, priority_room FROM mob_tags ORDER BY id ASC") or {}
+    if #rows == 0 then return true end
+
+    local keptByKey = {}
+    for _, row in ipairs(rows) do
+        local mob = normalizeMobTagName(row.mob)
+        local zone = normalizeMobTagZone(row.zone)
+        local key = mob .. "|" .. zone
+        local id = tonumber(row.id) or 0
+        local nowhere = tonumber(row.nowhere) == 1
+        local nohunt = tonumber(row.nohunt) == 1
+        local priority = tonumber(row.priority_room)
+
+        local keep = keptByKey[key]
+        if not keep then
+            keptByKey[key] = {
+                id = id,
+                mob = mob,
+                zone = zone,
+                nowhere = nowhere,
+                nohunt = nohunt,
+                priority_room = priority,
+            }
+        else
+            keep.nowhere = keep.nowhere or nowhere
+            keep.nohunt = keep.nohunt or nohunt
+            if (not keep.priority_room or keep.priority_room <= 0) and priority and priority > 0 then
+                keep.priority_room = priority
+            end
+            snd.db.execute(string.format("DELETE FROM mob_tags WHERE id = %d", id))
+        end
+    end
+
+    for _, keep in pairs(keptByKey) do
+        local sql = string.format(
+            "UPDATE mob_tags SET mob=%s, zone=%s, nowhere=%d, nohunt=%d, priority_room=%s WHERE id=%d",
+            snd.db.escape(keep.mob),
+            snd.db.escape(keep.zone),
+            keep.nowhere and 1 or 0,
+            keep.nohunt and 1 or 0,
+            (keep.priority_room and keep.priority_room > 0) and tostring(math.floor(keep.priority_room)) or "NULL",
+            keep.id
+        )
+        snd.db.execute(sql)
+    end
+
+    return true
+end
+
+function snd.db.ensureMobTagRow(mobName, zone)
+    if not snd.db.ensureMobTagsTable() then return false end
+    local mob = normalizeMobTagName(mobName)
+    local normalizedZone = normalizeMobTagZone(zone)
+    if mob == "" or normalizedZone == "" then return false end
+    local sql = string.format(
+        "INSERT OR IGNORE INTO mob_tags (mob, zone) VALUES (%s, %s)",
+        snd.db.escape(mob),
+        snd.db.escape(normalizedZone)
+    )
+    return snd.db.execute(sql)
+end
+
+function snd.db.getMobTags(mobName, zone)
+    if not snd.db.ensureMobTagsTable() then return nil end
+    local mob = normalizeMobTagName(mobName)
+    local normalizedZone = normalizeMobTagZone(zone)
+    if mob == "" or normalizedZone == "" then return nil end
+    local sql = string.format(
+        "SELECT id, mob, zone, nowhere, nohunt, priority_room FROM mob_tags WHERE lower(mob)=lower(%s) AND lower(zone)=lower(%s) LIMIT 1",
+        snd.db.escape(mob),
+        snd.db.escape(normalizedZone)
+    )
+    local rows = snd.db.query(sql) or {}
+    if #rows == 0 then return nil end
+    local row = rows[1]
+    return {
+        id = tonumber(row.id),
+        mob = row.mob,
+        zone = row.zone,
+        nowhere = tonumber(row.nowhere) == 1,
+        nohunt = tonumber(row.nohunt) == 1,
+        priority_room = tonumber(row.priority_room),
+    }
+end
+
+function snd.db.toggleMobTag(mobName, zone, flag)
+    if flag ~= "nowhere" and flag ~= "nohunt" then return nil end
+    local mob = normalizeMobTagName(mobName)
+    local normalizedZone = normalizeMobTagZone(zone)
+    if mob == "" or normalizedZone == "" then return nil end
+    snd.db.ensureMobTagRow(mob, normalizedZone)
+    local current = snd.db.getMobTags(mob, normalizedZone) or {}
+    local currentVal = current[flag] and 1 or 0
+    local nextVal = (currentVal == 1) and 0 or 1
+    local sql = string.format(
+        "UPDATE mob_tags SET %s=%d WHERE lower(mob)=lower(%s) AND lower(zone)=lower(%s)",
+        flag, nextVal, snd.db.escape(mob), snd.db.escape(normalizedZone)
+    )
+    if snd.db.execute(sql) then
+        return nextVal == 1
+    end
+    return nil
+end
+
+function snd.db.setMobPriorityRoom(mobName, zone, roomId)
+    local mob = normalizeMobTagName(mobName)
+    local normalizedZone = normalizeMobTagZone(zone)
+    if mob == "" or normalizedZone == "" then return false end
+    snd.db.ensureMobTagRow(mob, normalizedZone)
+    local rid = tonumber(roomId)
+    local valueSql = rid and tostring(math.floor(rid)) or "NULL"
+    local sql = string.format(
+        "UPDATE mob_tags SET priority_room=%s WHERE lower(mob)=lower(%s) AND lower(zone)=lower(%s)",
+        valueSql, snd.db.escape(mob), snd.db.escape(normalizedZone)
+    )
+    return snd.db.execute(sql)
+end
+
+function snd.db.clearMobTags(mobName, zone)
+    local mob = normalizeMobTagName(mobName)
+    local normalizedZone = normalizeMobTagZone(zone)
+    if mob == "" or normalizedZone == "" then return false end
+    local sql = string.format(
+        "DELETE FROM mob_tags WHERE lower(mob)=lower(%s) AND lower(zone)=lower(%s)",
+        snd.db.escape(mob), snd.db.escape(normalizedZone)
+    )
+    return snd.db.execute(sql)
+end
+
+function snd.db.listMobTags(zone, search)
+    if not snd.db.ensureMobTagsTable() then return {} end
+    local where = {}
+    if zone and snd.utils.trim(zone) ~= "" then
+        table.insert(where, "lower(zone)=lower(" .. snd.db.escape(normalizeMobTagZone(zone)) .. ")")
+    end
+    if search and snd.utils.trim(search) ~= "" then
+        table.insert(where, "lower(mob) LIKE lower(" .. snd.db.escape("%" .. snd.utils.trim(search) .. "%") .. ")")
+    end
+    table.insert(where, "(nowhere=1 OR nohunt=1 OR priority_room IS NOT NULL)")
+    local sql = "SELECT id, mob, zone, nowhere, nohunt, priority_room FROM mob_tags WHERE " .. table.concat(where, " AND ") .. " ORDER BY zone, mob"
+    local rows = snd.db.query(sql) or {}
+    local out = {}
+    for _, row in ipairs(rows) do
+        table.insert(out, {
+            id = tonumber(row.id),
+            mob = row.mob or "",
+            zone = row.zone or "",
+            nowhere = tonumber(row.nowhere) == 1,
+            nohunt = tonumber(row.nohunt) == 1,
+            priority_room = tonumber(row.priority_room),
+        })
+    end
+    return out
+end
+
+function snd.db.deleteMobTagById(id)
+    local n = tonumber(id)
+    if not n then return false end
+    local sql = string.format("DELETE FROM mob_tags WHERE id = %d", math.floor(n))
+    return snd.db.execute(sql)
 end
 
 --- Get list of tables in database
@@ -283,9 +509,9 @@ function snd.db.recordMobSeen(mobName, roomName, roomId, zone)
         snd.db.pruneSeenCache(now)
     end
     
-    -- Ensure row exists, default seen_count=1 for first sighting
+    -- Ensure row exists before incrementing seen_count.
     local sql = string.format(
-        "INSERT OR IGNORE INTO mobs (mob, room, roomid, zone, seen_count, kill_count) VALUES (%s, %s, %d, %s, 1, 0)",
+        "INSERT OR IGNORE INTO mobs (mob, room, roomid, zone, seen_count, kill_count) VALUES (%s, %s, %d, %s, 0, 0)",
         snd.db.escape(mobName),
         snd.db.escape(roomName),
         roomId,
@@ -317,6 +543,19 @@ function snd.db.recordMobKill(mobName, roomId, roomName, zone)
     roomName = roomName or (snd.room.current and snd.room.current.name) or ""
     zone = zone or (snd.room.current and snd.room.current.arid) or ""
 
+    local now = os.time()
+    local cacheKey = string.format("%s|%d", tostring(mobName):lower(), roomId)
+    local lastKill = snd.db.killCache and snd.db.killCache[cacheKey] or nil
+    local cooldown = tonumber(snd.db.killCooldownSeconds) or 3
+    if lastKill and (now - lastKill) < cooldown then
+        return
+    end
+
+    local lastPrune = tonumber(snd.db.killCacheLastPrune) or 0
+    if (now - lastPrune) > 10 then
+        snd.db.pruneKillCache(now)
+    end
+
     local sql = string.format(
         "UPDATE mobs SET kill_count = kill_count + 1 WHERE mob = %s AND roomid = %d",
         snd.db.escape(mobName), roomId
@@ -324,13 +563,14 @@ function snd.db.recordMobKill(mobName, roomId, roomName, zone)
     snd.db.execute(sql)
 
     sql = string.format(
-        "INSERT OR IGNORE INTO mobs (mob, room, roomid, zone, seen_count, kill_count) VALUES (%s, %s, %d, %s, 0, 1)",
+        "INSERT OR IGNORE INTO mobs (mob, room, roomid, zone, seen_count, kill_count) VALUES (%s, %s, %d, %s, 1, 1)",
         snd.db.escape(mobName),
         snd.db.escape(roomName),
         roomId,
         snd.db.escape(zone)
     )
     snd.db.execute(sql)
+    snd.db.killCache[cacheKey] = now
 end
 
 --- Search for mobs by name

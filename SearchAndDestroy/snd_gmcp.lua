@@ -485,15 +485,6 @@ function snd.gmcp.onQuestKilled(q)
     
     snd.utils.infoNote("Quest target killed!")
 
-    if snd.db and snd.quest.target.mob ~= "" and snd.room.current.rmid then
-        snd.db.recordMobKill(
-            snd.quest.target.mob,
-            snd.room.current.rmid,
-            snd.room.current.name,
-            snd.room.current.arid
-        )
-    end
-    
     if snd.gui and snd.gui.refresh then
         snd.gui.refresh()
     end

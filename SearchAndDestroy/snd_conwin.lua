@@ -466,6 +466,14 @@ function CW.considerLine(name, color, range, prefixHint)
     if #CW.mobs > 0 and alignTag then
         CW.mobs[#CW.mobs].alignTag = alignTag
     end
+    if mobName ~= "" and snd.db and snd.room and snd.room.current and snd.room.current.rmid then
+        snd.db.recordMobSeen(
+            mobName,
+            snd.room.current.name,
+            snd.room.current.rmid,
+            snd.room.current.arid
+        )
+    end
     CW.deferFinish()
 end
 
@@ -568,12 +576,14 @@ function CW.onCharStatus()
 
     if hadEnemy and not hasEnemy then
         local matched = false
+        local killedMobName = ""
         local strictFocus = cfg().strictFocusIdOnly and true or false
         local ambiguousPrevEnemy = strictFocus and not CW.currentEnemyMobId and countAliveByNormalizedName(prevEnemy) > 1
         if CW.currentEnemyMobId then
             for _, m in ipairs(CW.mobs) do
                 if m.id == CW.currentEnemyMobId and not m.dead then
                     m.dead = true
+                    killedMobName = m.name or ""
                     matched = true
                     break
                 end
@@ -583,6 +593,7 @@ function CW.onCharStatus()
             for _, m in ipairs(CW.mobs) do
                 if not m.dead and normalizeMobName(m.name) == prevEnemy then
                     m.dead = true
+                    killedMobName = m.name or ""
                     matched = true
                     break
                 end
@@ -591,6 +602,21 @@ function CW.onCharStatus()
         CW.currentEnemyMobId = nil
         if matched then
             CW.killsSinceRefresh = (tonumber(CW.killsSinceRefresh) or 0) + 1
+        end
+
+        if matched then
+            local mobToRecord = trim(killedMobName)
+            if mobToRecord == "" then
+                mobToRecord = trim(CW.lastEnemy or "")
+            end
+            if mobToRecord ~= "" and snd.db and snd.room and snd.room.current and snd.room.current.rmid then
+                snd.db.recordMobKill(
+                    mobToRecord,
+                    snd.room.current.rmid,
+                    snd.room.current.name,
+                    snd.room.current.arid
+                )
+            end
         end
 
         local threshold = math.max(0, math.floor(tonumber(cfg().repopulate) or 0))

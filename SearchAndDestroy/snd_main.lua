@@ -57,6 +57,9 @@ snd.config = snd.config or {
     -- Next action after arriving at target (smartscan, con, scan, qs, none)
     nxAction = "qs",
     
+    -- xcp action mode compatibility: ht|qw|off
+    xcpActionMode = "qw",
+    
     -- Overwrite con data
     overwriteCon = true,
     
@@ -388,6 +391,10 @@ snd.nav = snd.nav or {
         direction = "",
         mob = "",
         data = {},
+        active = false,
+        keyword = "",
+        throughPortal = false,
+        lastDirection = "",
     },
     
     -- Hunt trick state
@@ -1020,9 +1027,32 @@ function snd.onDestinationArrived()
         send("con", false)
     elseif action == "scan" then
         send("scan", false)
+    elseif action == "scanhere" then
+        send("scan here", false)
     elseif action == "qs" then
         snd.scan.quickScan()
     end
+
+    local current = snd.targets and snd.targets.current
+    local mode = snd.config and snd.config.xcpActionMode or "qw"
+    local shouldRunXcpModeAction = false
+    if current and snd.nav and snd.nav.nxState and snd.nav.nxState.arrived then
+        if snd.commands and snd.commands.buildTargetKeyFromCurrent then
+            local currentKey = snd.commands.buildTargetKeyFromCurrent(current)
+            shouldRunXcpModeAction = (currentKey ~= "" and currentKey == snd.nav.nxState.targetKey)
+        else
+            shouldRunXcpModeAction = true
+        end
+    end
+
+    if shouldRunXcpModeAction and (current.activity == "cp" or current.activity == "gq") and mode ~= "off" then
+        if mode == "ht" and snd.commands and snd.commands.ht then
+            snd.commands.ht("")
+        elseif mode == "qw" and snd.commands and snd.commands.qw then
+            snd.commands.qw("")
+        end
+    end
+
 end
 
 --- Called when character state changes

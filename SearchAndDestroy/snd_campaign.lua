@@ -607,19 +607,19 @@ function snd.cp.buildMainTargetList()
     snd.targets.list = newList
     
     -- Add campaign targets at the end (lower priority than GQ/Quest)
+    local duplicateCounts = {}
+    for _, t in ipairs(snd.campaign.targets) do
+        local k = string.format("%s|%s|%s", tostring(t.mob or ""):lower(), tostring(t.arid or ""):lower(), tostring(t.loc or ""):lower())
+        duplicateCounts[k] = (duplicateCounts[k] or 0) + 1
+    end
+
+    local duplicateIndexSeen = {}
     for i, target in ipairs(snd.campaign.targets) do
         if not target.dead then
             local roomName = ""
             if snd.campaign.targetType == "room" and target.loc and target.loc ~= "" then
                 roomName = target.loc
             end
-        if not target.dead then
-        local roomName = ""
-        if snd.campaign.targetType == "room" and target.loc and target.loc ~= "" then
-            roomName = target.loc
-        end
-
-
             local hasMobData = true
             if snd.campaign.targetType ~= "room" and snd.db and snd.db.getMobLocations then
                 local locations = snd.db.getMobLocations(target.mob, target.arid)
@@ -637,8 +637,24 @@ function snd.cp.buildMainTargetList()
                 keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, target.arid),
                 hasMobData = hasMobData,
             }
-            table.insert(snd.targets.list, entry)
-        end
+            local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, target.arid) or nil
+            if tags then
+                entry.nowhere = tags.nowhere
+                entry.nohunt = tags.nohunt
+                entry.priority_room = tags.priority_room
+            end
+            if entry.nowhere then
+                -- Explicitly hidden mob for this zone
+            else
+                local dk = string.format("%s|%s|%s", tostring(target.mob or ""):lower(), tostring(target.arid or ""):lower(), tostring(target.loc or ""):lower())
+                duplicateIndexSeen[dk] = (duplicateIndexSeen[dk] or 0) + 1
+                entry.duplicates = duplicateCounts[dk] or 1
+                entry.index = duplicateIndexSeen[dk]
+                if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
+                    entry.rmid = tonumber(entry.priority_room)
+                end
+                table.insert(snd.targets.list, entry)
+            end
         end
 
     end
@@ -652,15 +668,19 @@ function snd.cp.updateTargetStatus()
     -- Then mark as dead based on check list
     
     local prunedList = {}
+    local consumedChecks = {}
     for _, target in ipairs(snd.targets.list) do
         if target.activity == "cp" then
             target.dead = false
             
             -- Check if this target is in the check list
             local found = false
-            for _, check in ipairs(snd.campaign.checkList) do
-                if target.mob == check.mob then
+            for idx, check in ipairs(snd.campaign.checkList) do
+                if not consumedChecks[idx]
+                    and target.mob == check.mob
+                    and ((target.loc or "") == (check.loc or "") or (check.loc or "") == "" or (target.loc or "") == "") then
                     found = true
+                    consumedChecks[idx] = true
                     target.dead = check.dead
                     break
                 end
@@ -702,26 +722,30 @@ function snd.cp.onMobKilled()
         local target = snd.targets.current
         
         -- Mark as dead in target list
-        for _, t in ipairs(snd.targets.list) do
-            if t.mob == target.name or t.mob == target.keyword then
-                t.dead = true
-                break
+        local bestIndex, bestScore = nil, -1
+        local currentArea = snd.room and snd.room.current and tostring(snd.room.current.arid or "") or ""
+        local currentRoom = snd.room and snd.room.current and tostring(snd.room.current.name or "") or ""
+        for i, t in ipairs(snd.targets.list) do
+            if t.activity == "cp" and not t.dead then
+                if t.mob == target.name then
+                    local score = 5
+                    if t.arid and currentArea ~= "" and tostring(t.arid) == currentArea then score = score + 3 end
+                    if t.roomName and currentRoom ~= "" and tostring(t.roomName) == currentRoom then score = score + 2 end
+                    if target.index and t.index and tonumber(target.index) == tonumber(t.index) then score = score + 1 end
+                    if score > bestScore then
+                        bestScore = score
+                        bestIndex = i
+                    end
+                end
             end
+        end
+        if bestIndex and snd.targets.list[bestIndex] then
+            snd.targets.list[bestIndex].dead = true
         end
         snd.cp.updateTargetStatus()
         if snd.cp.getRemainingCount and snd.cp.getRemainingCount() == 0 then
             shouldSyncAfterKill = false
             snd.utils.debugNote("Skipping post-kill cp check because last campaign target was just killed")
-        end
-        
-        -- Record in database
-        if snd.db and snd.room.current.rmid then
-            snd.db.recordMobKill(
-                target.name,
-                snd.room.current.rmid,
-                snd.room.current.name,
-                snd.room.current.arid
-            )
         end
         
         -- Clear current target
@@ -990,6 +1014,7 @@ function snd.cp.selectTarget(index)
         keyword = target.keyword,
         name = target.mob,
         roomName = target.roomName or "",
+        roomId = target.rmid,
         area = target.arid or "",       -- Area key for navigation
         areaName = target.loc or "",    -- Area display name
         index = index,

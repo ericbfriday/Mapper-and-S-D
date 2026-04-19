@@ -820,8 +820,12 @@ function snd.triggers.qwMatch(matches)
     local function lineMatchesTarget()
         local mobLine = mobName:lower()
 
-        if quickWhere.exact and snd.targets.current and snd.targets.current.name then
-            local exactTarget = snd.utils.trim((snd.targets.current.name or ""):sub(1, 30)):lower()
+        if quickWhere.exact then
+            local exactSource = snd.utils.trim(quickWhere.exactMatchText or "")
+            if exactSource == "" and snd.targets.current and snd.targets.current.name then
+                exactSource = snd.utils.trim(snd.targets.current.name or "")
+            end
+            local exactTarget = snd.utils.trim(exactSource:sub(1, 30)):lower()
             if exactTarget ~= "" and mobLine == exactTarget then
                 return true
             end
@@ -920,6 +924,11 @@ function snd.triggers.huntDirection(matches)
         snd.nav.autoHunt.direction = direction
     end
 
+    if snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active and snd.commands and snd.commands.autoHuntNext then
+        snd.commands.autoHuntNext(direction)
+        return
+    end
+
     if snd.nav and snd.nav.huntTrick and snd.nav.huntTrick.active and snd.commands and snd.commands.huntTrickContinue then
         snd.commands.huntTrickContinue()
     end
@@ -934,6 +943,11 @@ function snd.triggers.huntHere()
         snd.nav.autoHunt.direction = "here"
     end
 
+    if snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active and snd.commands and snd.commands.autoHuntComplete then
+        snd.commands.autoHuntComplete()
+        return
+    end
+
     if snd.nav and snd.nav.huntTrick and snd.nav.huntTrick.active and snd.commands and snd.commands.huntTrickContinue then
         snd.commands.huntTrickContinue()
     end
@@ -941,6 +955,10 @@ end
 
 --- Hunt trick complete trigger
 function snd.triggers.huntComplete()
+    if snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active and snd.commands and snd.commands.autoHuntComplete then
+        snd.commands.autoHuntComplete()
+        return
+    end
     if snd.commands and snd.commands.huntTrickComplete then
         snd.commands.huntTrickComplete()
     end
@@ -948,6 +966,10 @@ end
 
 --- Hunt trick fail trigger
 function snd.triggers.huntFail()
+    if snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active and snd.commands and snd.commands.stopAutoHunt then
+        snd.commands.stopAutoHunt(true)
+        return
+    end
     if snd.commands and snd.commands.huntTrickFail then
         snd.commands.huntTrickFail()
     end
@@ -955,6 +977,10 @@ end
 
 --- Hunt trick abort trigger
 function snd.triggers.huntAbort()
+    if snd.nav and snd.nav.autoHunt and snd.nav.autoHunt.active and snd.commands and snd.commands.stopAutoHunt then
+        snd.commands.stopAutoHunt(true)
+        return
+    end
     if snd.commands and snd.commands.stopHunt then
         snd.commands.stopHunt()
     end
