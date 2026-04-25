@@ -97,8 +97,8 @@ mm.help_table = {
       { cmd = "mapper cexit <command>", desc = "Follow and link a custom exit (ex: 'mapper cexit ride bucket') To insert a pause during execution of the cexit, use wait(<seconds>) as one or more of the cexit moves To stack commands use ;; as separator (ex: 'mapper cexit open south;;south')" },
       { cmd = "mapper cexit_wait <seconds>", desc = "Wait this number of seconds instead of the standard 2 when constructing the next cexit (between 2 and 40)" },
       { cmd = "mapper lockedexits", desc = "List locked exits for the current room." },
-      { cmd = "mapper lockexit <n|s|e|w|u|d> [level]", desc = "Lock one exit in the current room by writing exits.level. Without level, sets level 999 (all levels)." },
-      { cmd = "mapper lockexit <n|s|e|w|u|d> off", desc = "Remove the lock on one exit in the current room." },
+      { cmd = "mapper lockexit <n|s|e|w|u|d> [level]", desc = "Lock the selected direction and any same-room exits to the same destination by writing exits.level. Without level, sets level 999 (all levels)." },
+      { cmd = "mapper lockexit <n|s|e|w|u|d> off", desc = "Remove the lock for the selected direction and any same-room exits to the same destination." },
       { cmd = "mapper fullcexit {<command>} <source> <destination> <level> (quiet)", desc = "Set all cexit aspects in one command without running it." },
     }
   },

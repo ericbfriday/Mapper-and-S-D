@@ -245,12 +245,23 @@ function snd.mapper.setExitLock(roomId, dir, level)
         return false, "cannot open mapper database"
     end
 
-    local sql = string.format(
-        "UPDATE exits SET level = %d WHERE fromuid = %s AND LOWER(dir) IN (%s, %s)",
+    local canonicalDir = ({n="north",s="south",e="east",w="west",u="up",d="down"})[normalizedDir]
+    local sql = string.format([[
+        UPDATE exits
+        SET level = %d
+        WHERE fromuid = %s
+          AND touid IN (
+              SELECT touid
+              FROM exits
+              WHERE fromuid = %s
+                AND LOWER(dir) IN (%s, %s)
+          )
+    ]],
         lockLevel,
         snd.mapper.db.escape(roomKey),
+        snd.mapper.db.escape(roomKey),
         snd.mapper.db.escape(normalizedDir),
-        snd.mapper.db.escape(({n="north",s="south",e="east",w="west",u="up",d="down"})[normalizedDir])
+        snd.mapper.db.escape(canonicalDir)
     )
     local affected, err = snd.mapper.db.conn:execute(sql)
     if not affected then
@@ -274,11 +285,22 @@ function snd.mapper.clearExitLock(roomId, dir)
         return false, "cannot open mapper database"
     end
 
-    local sql = string.format(
-        "UPDATE exits SET level = 0 WHERE fromuid = %s AND LOWER(dir) IN (%s, %s)",
+    local canonicalDir = ({n="north",s="south",e="east",w="west",u="up",d="down"})[normalizedDir]
+    local sql = string.format([[
+        UPDATE exits
+        SET level = 0
+        WHERE fromuid = %s
+          AND touid IN (
+              SELECT touid
+              FROM exits
+              WHERE fromuid = %s
+                AND LOWER(dir) IN (%s, %s)
+          )
+    ]],
+        snd.mapper.db.escape(roomKey),
         snd.mapper.db.escape(roomKey),
         snd.mapper.db.escape(normalizedDir),
-        snd.mapper.db.escape(({n="north",s="south",e="east",w="west",u="up",d="down"})[normalizedDir])
+        snd.mapper.db.escape(canonicalDir)
     )
     local affected, err = snd.mapper.db.conn:execute(sql)
     if not affected then
