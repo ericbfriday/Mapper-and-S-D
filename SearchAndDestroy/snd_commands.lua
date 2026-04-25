@@ -1343,11 +1343,11 @@ end
 
 function snd.commands.enableAutoHunt()
     clearAutoHuntTriggers()
-    addAutoHuntTrigger("^You are (?:almost )?certain that .+ is (north|south|east|west|up|down) from here\\.$", function()
+    addAutoHuntTrigger("^\\s*You are (?:almost )?certain that .+ is (north|south|east|west|up|down) from here\\.$", function()
         local dir = matches and matches[2] or ""
         snd.commands.autoHuntNext(dir)
     end)
-    addAutoHuntTrigger("^You are confident that .+ passed through here, heading (north|south|east|west|up|down)\\.$", function()
+    addAutoHuntTrigger("^\\s*You are confident that .+ passed through here, heading (north|south|east|west|up|down)\\.$", function()
         local dir = matches and matches[2] or ""
         snd.commands.autoHuntNext(dir)
     end)

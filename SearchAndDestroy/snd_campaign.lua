@@ -614,6 +614,7 @@ function snd.cp.buildMainTargetList()
     end
 
     local duplicateIndexSeen = {}
+    local cpDisplayIndex = 0
     for i, target in ipairs(snd.campaign.targets) do
         if not target.dead then
             local roomName = ""
@@ -649,7 +650,10 @@ function snd.cp.buildMainTargetList()
                 local dk = string.format("%s|%s|%s", tostring(target.mob or ""):lower(), tostring(target.arid or ""):lower(), tostring(target.loc or ""):lower())
                 duplicateIndexSeen[dk] = (duplicateIndexSeen[dk] or 0) + 1
                 entry.duplicates = duplicateCounts[dk] or 1
-                entry.index = duplicateIndexSeen[dk]
+                entry.dupIndex = duplicateIndexSeen[dk]
+                entry.index = entry.dupIndex
+                cpDisplayIndex = cpDisplayIndex + 1
+                entry.displayIndex = cpDisplayIndex
                 if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
                     entry.rmid = tonumber(entry.priority_room)
                 end
@@ -703,7 +707,7 @@ function snd.cp.updateTargetStatus()
     for _, target in ipairs(snd.targets.list) do
         if target.activity == "cp" and not target.dead then
             cpIndex = cpIndex + 1
-            target.index = cpIndex
+            target.displayIndex = cpIndex
         end
     end
 end
@@ -731,7 +735,9 @@ function snd.cp.onMobKilled()
                     local score = 5
                     if t.arid and currentArea ~= "" and tostring(t.arid) == currentArea then score = score + 3 end
                     if t.roomName and currentRoom ~= "" and tostring(t.roomName) == currentRoom then score = score + 2 end
-                    if target.index and t.index and tonumber(target.index) == tonumber(t.index) then score = score + 1 end
+                    if target.index and t.displayIndex and tonumber(target.index) == tonumber(t.displayIndex) then
+                        score = score + 1
+                    end
                     if score > bestScore then
                         bestScore = score
                         bestIndex = i
@@ -918,12 +924,16 @@ function snd.cp.clearCampaign()
         snd.targets.list = {}
         snd.targets.type = "none"
         snd.targets.activity = "none"
-        
+
         if snd.isCpOrGqTarget() then
             snd.clearTarget()
         end
     end
-    
+
+    if snd.nav and snd.nav.clearActivityQuickWhere then
+        snd.nav.clearActivityQuickWhere("cp")
+    end
+
     if snd.gui and snd.gui.refresh then
         snd.gui.refresh()
     end

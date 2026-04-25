@@ -16,20 +16,8 @@ snd = snd or {}
 snd.gmcp = snd.gmcp or {}
 
 local function clearQuestQuickWhereCache()
-    snd.nav = snd.nav or {}
-    snd.nav.quickWhereByActivity = snd.nav.quickWhereByActivity or {}
-    snd.nav.quickWhereByActivity.quest = {
-        rooms = {},
-        index = 1,
-        active = false,
-        targetKey = "",
-    }
-    snd.nav.quickWhere = snd.nav.quickWhere or {}
-    if snd.nav.quickWhere.scope == "quest" then
-        snd.nav.quickWhere.rooms = {}
-        snd.nav.quickWhere.index = 1
-        snd.nav.quickWhere.active = false
-        snd.nav.quickWhere.targetKey = ""
+    if snd.nav and snd.nav.clearActivityQuickWhere then
+        snd.nav.clearActivityQuickWhere("quest")
     end
 end
 

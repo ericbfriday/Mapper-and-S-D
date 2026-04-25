@@ -935,6 +935,45 @@ function snd.clearTarget()
     end
 end
 
+function snd.nav.clearActivityQuickWhere(activity)
+    if activity ~= "quest" and activity ~= "gq" and activity ~= "cp" then
+        return
+    end
+
+    snd.nav.quickWhereByActivity = snd.nav.quickWhereByActivity or {}
+    snd.nav.quickWhereByActivity[activity] = {
+        rooms = {},
+        index = 1,
+        active = false,
+        targetKey = "",
+    }
+
+    snd.nav.quickWhere = snd.nav.quickWhere or {}
+    if snd.nav.quickWhere.scope == activity or snd.nav.quickWhere.scope == nil then
+        snd.nav.quickWhere.rooms = {}
+        snd.nav.quickWhere.index = 1
+        snd.nav.quickWhere.active = false
+        snd.nav.quickWhere.targetKey = ""
+        snd.nav.quickWhere.pendingMatches = {}
+    end
+
+    local prefix = activity .. "|"
+    if snd.nav.nxState and type(snd.nav.nxState.targetKey) == "string"
+        and snd.nav.nxState.targetKey:sub(1, #prefix) == prefix then
+        snd.nav.nxState = nil
+    end
+
+    if type(snd.nav.gotoListTargetKey) == "string"
+        and snd.nav.gotoListTargetKey:sub(1, #prefix) == prefix then
+        snd.nav.gotoList = {}
+        snd.nav.gotoListTargetKey = ""
+    end
+
+    if snd.targets and snd.targets.scoped then
+        snd.targets.scoped[activity] = nil
+    end
+end
+
 --- Set a new target
 function snd.setTarget(target)
     snd.targets.current = target

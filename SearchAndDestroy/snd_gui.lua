@@ -1119,7 +1119,7 @@ function snd.gui.updateTargetList()
 
                 local dupStr = ""
                 if v.duplicates and v.duplicates > 1 then
-                    dupStr = string.format("(%d/%d) ", v.index or 1, v.duplicates)
+                    dupStr = string.format("(%d/%d) ", v.dupIndex or v.index or 1, v.duplicates)
                 end
 
                 local prefix = ""
