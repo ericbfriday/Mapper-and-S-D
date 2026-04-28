@@ -513,6 +513,19 @@ function snd.gq.onEnded(gqId)
     end
 end
 
+--- Handle gquest quit message
+-- @param gqId The global quest ID
+function snd.gq.onQuit(gqId)
+    snd.utils.reportLine("Left Global Quest #" .. gqId, "gquest")
+
+    if snd.gquest.joined == gqId or snd.gquest.started == gqId then
+        if snd.db then
+            snd.db.historyEnd(snd.db.HISTORY_TYPE_GQUEST, snd.db.HISTORY_STATUS_FAILED)
+        end
+        snd.gq.clearGquest()
+    end
+end
+
 --- Handle not on gquest message
 function snd.gq.onNotOnGquest()
     snd.utils.debugNote("Not on global quest")

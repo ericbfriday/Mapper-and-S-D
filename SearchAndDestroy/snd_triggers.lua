@@ -390,6 +390,13 @@ function snd.triggers.gqEnded(matches)
     snd.gq.onEnded(matches[2])
 end
 
+--- GQ quit trigger
+-- Matches: "You are no longer part of Global Quest # 123 and will be unable to rejoin."
+function snd.triggers.gqQuit(matches)
+    if not matches or not matches[2] then return end
+    snd.gq.onQuit(matches[2])
+end
+
 --- Not on GQ trigger
 function snd.triggers.gqNotOn()
     snd.gq.onNotOnGquest()
