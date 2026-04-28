@@ -209,6 +209,8 @@ end
 
 --- Auto-noexp must level trigger
 function snd.triggers.noexpMustLevelBeforeCampaign()
+    snd.campaign.canGetNew = false
+
     if snd.gmcp and snd.gmcp.setCampaignEligibility then
         snd.gmcp.setCampaignEligibility(false)
     elseif snd.char and snd.char.noexp then
@@ -217,6 +219,9 @@ function snd.triggers.noexpMustLevelBeforeCampaign()
     end
     if snd.gui and snd.gui.updateNoexp then
         snd.gui.updateNoexp()
+    end
+    if snd.gui and snd.gui.refresh then
+        snd.gui.refresh()
     end
 end
 

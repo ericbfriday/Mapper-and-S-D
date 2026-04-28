@@ -174,7 +174,7 @@ snd.campaign = snd.campaign or {
     completedTodayDate = "",
     targets = {},      -- Full target list from cp info
     checkList = {},    -- Current check list from cp check
-    canGetNew = false,
+    canGetNew = nil,
     lastCheck = 0,
     -- Rewards tracking
     qpReward = 0,
@@ -1045,6 +1045,35 @@ function snd.onRoomChange()
     end
 end
 
+local function roomDetailsContainSafe(details)
+    local v = tostring(details or ""):lower()
+    if v == "" then return false end
+    for token in v:gmatch("[^,%s]+") do
+        if token == "safe" then return true end
+    end
+    return false
+end
+
+local function gmcp_get(path)
+    local node = gmcp
+    for key in tostring(path or ""):gmatch("[^%.]+") do
+        if type(node) ~= "table" then return nil end
+        node = node[key]
+    end
+    return node
+end
+
+function snd.isCurrentRoomSafe()
+    local details = gmcp_get("room.info.details")
+    if details ~= nil and roomDetailsContainSafe(details) then return true end
+
+    local roomId = tostring(gmcp_get("room.info.num") or "")
+    if roomId ~= "" and snd.mapper and type(snd.mapper.isSafeRoom) == "function" then
+        if snd.mapper.isSafeRoom(roomId) then return true end
+    end
+    return false
+end
+
 --- Called when we arrive at navigation destination
 function snd.onDestinationArrived()
     snd.utils.debugNote("Arrived at destination room: " .. tostring(snd.room.current.rmid))
@@ -1058,27 +1087,32 @@ function snd.onDestinationArrived()
         end
     end
     
-    -- Execute next action based on config
     local action = snd.config.nxAction
-    if action == "smartscan" then
-        snd.scan.smartScan()
-    elseif action == "con" then
-        send("con", false)
-    elseif action == "scan" then
-        send("scan", false)
-    elseif action == "scanhere" then
-        send("scan here", false)
-    elseif action == "qs" then
-        snd.scan.quickScan()
+    if snd.isCurrentRoomSafe() then
+        snd.utils.debugNote("Skipping nxAction in safe room: " .. tostring(snd.room.current and snd.room.current.rmid))
+    else
+        -- Execute next action based on config
+        if action == "smartscan" then
+            snd.scan.smartScan()
+        elseif action == "con" then
+            send("con", false)
+        elseif action == "scan" then
+            send("scan", false)
+        elseif action == "scanhere" then
+            send("scan here", false)
+        elseif action == "qs" then
+            snd.scan.quickScan()
+        end
     end
 
     local current = snd.targets and snd.targets.current
     local mode = snd.config and snd.config.xcpActionMode or "qw"
+    local nxState = snd.nav and snd.nav.nxState or nil
     local shouldRunXcpModeAction = false
-    if current and snd.nav and snd.nav.nxState and snd.nav.nxState.arrived then
+    if current and nxState and nxState.arrived and not nxState.xcpActionFired then
         if snd.commands and snd.commands.buildTargetKeyFromCurrent then
             local currentKey = snd.commands.buildTargetKeyFromCurrent(current)
-            shouldRunXcpModeAction = (currentKey ~= "" and currentKey == snd.nav.nxState.targetKey)
+            shouldRunXcpModeAction = (currentKey ~= "" and currentKey == nxState.targetKey)
         else
             shouldRunXcpModeAction = true
         end
@@ -1086,8 +1120,10 @@ function snd.onDestinationArrived()
 
     if shouldRunXcpModeAction and (current.activity == "cp" or current.activity == "gq") and mode ~= "off" then
         if mode == "ht" and snd.commands and snd.commands.ht then
+            nxState.xcpActionFired = true
             snd.commands.ht("")
         elseif mode == "qw" and snd.commands and snd.commands.qw then
+            nxState.xcpActionFired = true
             snd.commands.qw("")
         end
     end

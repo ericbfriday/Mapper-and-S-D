@@ -693,13 +693,23 @@ function snd.commands.nx()
         foundIndex = findRoomIndex(currentRoom) or findRoomIndex(targetRoom)
 
         local nextIndex = nil
+        local wrappingCycle = false
         if foundIndex then
-            nextIndex = foundIndex < #quickWhere.rooms and (foundIndex + 1) or 1
+            if foundIndex < #quickWhere.rooms then
+                nextIndex = foundIndex + 1
+            else
+                nextIndex = 1
+                wrappingCycle = #quickWhere.rooms > 1
+            end
         else
             nextIndex = quickWhere.index or 1
         end
         quickWhere.index = nextIndex
         persistQuickWhereScope(quickWhere.scope or (current and current.activity))
+
+        if wrappingCycle and snd.nav.nxState then
+            snd.nav.nxState.xcpActionFired = nil
+        end
 
         local nextRoomId = quickWhere.rooms[nextIndex]
         if nextRoomId then
@@ -2490,7 +2500,7 @@ function snd.commands.selectQuestTarget()
                     questAreaKey = snd.db.getAreaKeyFromName(snd.quest.target.area) or ""
                 end
 
-                local locations = snd.db.getMobLocations(target.mob, questAreaKey) or {}
+                local locations = snd.db.getMobLocations(target.mob, questAreaKey, { legacy = true }) or {}
                 local filteredLocations = {}
 
                 -- Quest cache fallback: if area key is missing, prefer rows that also match
@@ -2887,7 +2897,9 @@ function snd.commands.reportHistoryRow(index, channelOverride)
     end
 
     local payload = snd.commands.buildHistoryRowChannelText(row)
-    if snd.commands and snd.commands.sendGameCommand then
+    if snd.utils and snd.utils.dispatchReportChannel then
+        snd.utils.dispatchReportChannel(channel, payload)
+    elseif snd.commands and snd.commands.sendGameCommand then
         snd.commands.sendGameCommand(channel .. " " .. payload, false)
     else
         send(channel .. " " .. payload, false)

@@ -478,6 +478,15 @@ function snd.cp.endCpInfo()
         snd.targets.activity = "cp"
     end
 
+    -- Build the main display list and refresh the window (same as GQ flow)
+    if #snd.campaign.targets > 0 then
+        snd.cp.buildMainTargetList()
+    end
+
+    if snd.gui and snd.gui.refresh then
+        snd.gui.refresh()
+    end
+
     snd.utils.debugNote("CP info complete. " .. #snd.campaign.targets .. " targets")
     if snd.campaign.active and snd.setActiveTab and snd.getPreferredActiveActivity then
         snd.setActiveTab(snd.getPreferredActiveActivity() or "cp", {save = true, refresh = false})
@@ -595,6 +604,176 @@ function snd.cp.determineTargetType(targets)
     return "area"
 end
 
+function snd.cp.resolveZonesForTarget(target, playerLevel)
+    local hint = tostring(target.loc or "")
+    local fallback = {
+        {
+            arid = target.arid or "",
+            areaName = hint,
+            roomName = "",
+            roomId = nil,
+            fromDb = false,
+        },
+    }
+
+    local levelKnown = playerLevel and playerLevel > 0
+    local areaCache = {}
+    local function getAreaCached(zone)
+        if areaCache[zone] == nil then
+            areaCache[zone] = (snd.db.getArea and snd.db.getArea(zone)) or false
+        end
+        return areaCache[zone] or nil
+    end
+    local function levelOk(area)
+        local minLvl = tonumber(area and area.minlvl) or 0
+        local maxLvl = tonumber(area and area.maxlvl) or 0
+        if not levelKnown then return true end
+        if minLvl == 0 and maxLvl == 0 then return true end
+        return maxLvl > playerLevel and playerLevel > minLvl
+    end
+
+    local function tryMapperFallback()
+        if hint == "" then return nil end
+        if not (snd.mapper and snd.mapper.searchRoomsExact) then return nil end
+        local ok, rows = pcall(snd.mapper.searchRoomsExact, hint, "", target.mob, {})
+        if not ok or type(rows) ~= "table" or #rows == 0 then return nil end
+        local seenZone = {}
+        local results = {}
+        for _, row in ipairs(rows) do
+            local zone = tostring(row.arid or row.area or "")
+            if zone ~= "" and not seenZone[zone] then
+                local area = getAreaCached(zone)
+                if levelOk(area) then
+                    seenZone[zone] = true
+                    table.insert(results, {
+                        arid = zone,
+                        areaName = (area and area.name) or zone,
+                        roomName = row.name or hint,
+                        roomId = tonumber(row.rmid or row.uid),
+                        seenCount = 0,
+                        fromDb = false,
+                        fromMapper = true,
+                    })
+                end
+            end
+        end
+        if #results == 0 then return nil end
+        return results
+    end
+
+    if not snd.db or not snd.db.getMobLocations or not target.mob or target.mob == "" then
+        return tryMapperFallback() or fallback
+    end
+
+    local rows = snd.db.getMobLocations(
+        target.mob,
+        "",
+        (hint ~= "" and { roomHint = hint } or nil)
+    ) or {}
+    if #rows == 0 and hint ~= "" then
+        rows = snd.db.getMobLocations(target.mob, "") or {}
+    end
+    if #rows == 0 then
+        return tryMapperFallback() or fallback
+    end
+
+    if hint ~= "" then
+        local hintLower = hint:lower()
+        local primary = {}
+        for _, row in ipairs(rows) do
+            local zone = tostring(row.zone or "")
+            if zone ~= "" and row.room and tostring(row.room):lower() == hintLower then
+                local area = getAreaCached(zone)
+                if levelOk(area) then
+                    table.insert(primary, {
+                        arid = zone,
+                        areaName = (area and area.name) or hint,
+                        roomName = row.room,
+                        roomId = tonumber(row.roomid),
+                        seenCount = tonumber(row.seen_count) or 0,
+                        fromDb = true,
+                    })
+                end
+            end
+        end
+        if #primary > 0 then
+            table.sort(primary, function(a, b)
+                return (a.seenCount or 0) > (b.seenCount or 0)
+            end)
+            return primary
+        end
+    end
+
+    local byZone = {}
+    local zoneOrder = {}
+    for _, row in ipairs(rows) do
+        local zone = tostring(row.zone or "")
+        if zone ~= "" then
+            local agg = byZone[zone]
+            if not agg then
+                agg = { rooms = {}, totalSeen = 0 }
+                byZone[zone] = agg
+                table.insert(zoneOrder, zone)
+            end
+            table.insert(agg.rooms, row)
+            agg.totalSeen = agg.totalSeen + (tonumber(row.seen_count) or 0)
+        end
+    end
+
+    if #zoneOrder == 0 then
+        return fallback
+    end
+
+    for _, zone in ipairs(zoneOrder) do
+        local agg = byZone[zone]
+        table.sort(agg.rooms, function(a, b)
+            return (tonumber(a.seen_count) or 0) > (tonumber(b.seen_count) or 0)
+        end)
+        agg.bestRow = agg.rooms[1]
+    end
+
+    table.sort(zoneOrder, function(a, b)
+        return (byZone[a].totalSeen or 0) > (byZone[b].totalSeen or 0)
+    end)
+
+    local kept = {}
+    for _, zone in ipairs(zoneOrder) do
+        local area = getAreaCached(zone)
+        if levelOk(area) then
+            local agg = byZone[zone]
+            local row = agg.bestRow
+            table.insert(kept, {
+                arid = zone,
+                areaName = (area and area.name) or hint,
+                roomName = row and row.room or "",
+                roomId = row and tonumber(row.roomid) or nil,
+                seenCount = agg.totalSeen,
+                fromDb = true,
+            })
+        end
+    end
+
+    if #kept == 0 then
+        snd.utils.debugNote(string.format(
+            "CP filter: dropped '%s' — no zone fits level %d (mob in %d zone(s) total)",
+            tostring(target.mob), playerLevel, #zoneOrder
+        ))
+        return tryMapperFallback() or {}
+    end
+
+    if hint ~= "" and #kept > 1 then
+        local hintLower = hint:lower()
+        for _, z in ipairs(kept) do
+            if z.areaName and z.areaName:lower() == hintLower then
+                return { z }
+            end
+        end
+    end
+
+
+    return kept
+end
+
 --- Build the main target list from campaign targets
 function snd.cp.buildMainTargetList()
     -- Remove existing CP targets but preserve GQ and Quest targets
@@ -605,65 +784,91 @@ function snd.cp.buildMainTargetList()
         end
     end
     snd.targets.list = newList
-    
-    -- Add campaign targets at the end (lower priority than GQ/Quest)
-    local duplicateCounts = {}
-    for _, t in ipairs(snd.campaign.targets) do
-        local k = string.format("%s|%s|%s", tostring(t.mob or ""):lower(), tostring(t.arid or ""):lower(), tostring(t.loc or ""):lower())
-        duplicateCounts[k] = (duplicateCounts[k] or 0) + 1
-    end
 
-    local duplicateIndexSeen = {}
-    local cpDisplayIndex = 0
+    local playerLevel = tonumber(snd.char and snd.char.level) or 0
+    local emittedAnyRoomTarget = false
+    local highEntries = {}
+    local lowEntries = {}
+
     for i, target in ipairs(snd.campaign.targets) do
         if not target.dead then
-            local roomName = ""
-            if snd.campaign.targetType == "room" and target.loc and target.loc ~= "" then
-                roomName = target.loc
+            local resolved = snd.cp.resolveZonesForTarget(target, playerLevel)
+            local visible = {}
+            for _, zone in ipairs(resolved) do
+                local arid = zone.arid or ""
+                local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, arid) or nil
+                if not (tags and tags.nowhere) then
+                    zone.tags = tags
+                    table.insert(visible, zone)
+                end
             end
-            local hasMobData = true
-            if snd.campaign.targetType ~= "room" and snd.db and snd.db.getMobLocations then
-                local locations = snd.db.getMobLocations(target.mob, target.arid)
-                hasMobData = #locations > 0
-            end
+            local total = #visible
+            for j, zone in ipairs(visible) do
+                local arid = zone.arid or ""
+                local roomName = ""
+                if zone.fromDb and zone.roomName and zone.roomName ~= "" then
+                    roomName = zone.roomName
+                    emittedAnyRoomTarget = true
+                elseif zone.fromMapper and zone.roomName and zone.roomName ~= "" then
+                    roomName = zone.roomName
+                    emittedAnyRoomTarget = true
+                elseif snd.campaign.targetType == "room" and not zone.fromDb and target.loc and target.loc ~= "" then
+                    roomName = target.loc
+                end
 
-            local entry = {
-                mob = target.mob,
-                loc = target.loc,
-                arid = target.arid or "",
-                roomName = roomName,
-                dead = target.dead or false,
-                index = i,
-                activity = "cp",
-                keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, target.arid),
-                hasMobData = hasMobData,
-            }
-            local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, target.arid) or nil
-            if tags then
-                entry.nowhere = tags.nowhere
-                entry.nohunt = tags.nohunt
-                entry.priority_room = tags.priority_room
-            end
-            if entry.nowhere then
-                -- Explicitly hidden mob for this zone
-            else
-                local dk = string.format("%s|%s|%s", tostring(target.mob or ""):lower(), tostring(target.arid or ""):lower(), tostring(target.loc or ""):lower())
-                duplicateIndexSeen[dk] = (duplicateIndexSeen[dk] or 0) + 1
-                entry.duplicates = duplicateCounts[dk] or 1
-                entry.dupIndex = duplicateIndexSeen[dk]
-                entry.index = entry.dupIndex
-                cpDisplayIndex = cpDisplayIndex + 1
-                entry.displayIndex = cpDisplayIndex
+                local entry = {
+                    mob = target.mob,
+                    loc = zone.areaName or target.loc or "",
+                    arid = arid,
+                    roomName = roomName,
+                    dead = false,
+                    index = j,
+                    activity = "cp",
+                    keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, arid),
+                    hasMobData = zone.fromDb == true,
+                    lowConfidence = zone.fromMapper == true,
+                    duplicates = total,
+                    dupIndex = j,
+                }
+
+                if zone.tags then
+                    entry.nohunt = zone.tags.nohunt
+                    entry.priority_room = zone.tags.priority_room
+                end
+
                 if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
                     entry.rmid = tonumber(entry.priority_room)
+                elseif zone.roomId then
+                    entry.rmid = zone.roomId
                 end
-                table.insert(snd.targets.list, entry)
+
+                if zone.fromMapper then
+                    table.insert(lowEntries, entry)
+                else
+                    table.insert(highEntries, entry)
+                end
             end
         end
-
     end
-    
-    snd.utils.debugNote("Built main target list: " .. #snd.targets.list .. " CP targets")
+
+    local cpDisplayIndex = 0
+    for _, entry in ipairs(highEntries) do
+        cpDisplayIndex = cpDisplayIndex + 1
+        entry.displayIndex = cpDisplayIndex
+        table.insert(snd.targets.list, entry)
+    end
+    for _, entry in ipairs(lowEntries) do
+        cpDisplayIndex = cpDisplayIndex + 1
+        entry.displayIndex = cpDisplayIndex
+        table.insert(snd.targets.list, entry)
+    end
+
+    if emittedAnyRoomTarget then
+        snd.campaign.targetType = "room"
+        snd.targets.type = "room"
+    end
+
+    snd.utils.debugNote("Built main target list: " .. #snd.targets.list .. " CP targets (level " .. playerLevel .. ")")
 end
 
 --- Update target status from cp check results
@@ -677,16 +882,25 @@ function snd.cp.updateTargetStatus()
         if target.activity == "cp" then
             target.dead = false
             
-            -- Check if this target is in the check list
             local found = false
             for idx, check in ipairs(snd.campaign.checkList) do
                 if not consumedChecks[idx]
                     and target.mob == check.mob
-                    and ((target.loc or "") == (check.loc or "") or (check.loc or "") == "" or (target.loc or "") == "") then
+                    and (target.loc or "") == (check.loc or "") then
                     found = true
                     consumedChecks[idx] = true
                     target.dead = check.dead
                     break
+                end
+            end
+            if not found then
+                for idx, check in ipairs(snd.campaign.checkList) do
+                    if not consumedChecks[idx] and target.mob == check.mob then
+                        found = true
+                        consumedChecks[idx] = true
+                        target.dead = check.dead
+                        break
+                    end
                 end
             end
             

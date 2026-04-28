@@ -82,6 +82,10 @@ mm.help_table = {
       { cmd = "mapper ui visited on/off", desc = "Enable or disable visited-room styling in quick-where cycles" },
       { cmd = "mapper ui chips on/off", desc = "Enable or disable compact status chips in mapper output headers" },
       { cmd = "mapper ui reset", desc = "Reset mapper/S&D UI style toggles to defaults (all on)" },
+      { cmd = "mapper saferoom", desc = "Mark current room safe (appends 'safe' to rooms.info, preserving existing flags)" },
+      { cmd = "mapper saferoom on/off", desc = "Toggle the safe flag on the current room" },
+      { cmd = "mapper saferoom <roomId>", desc = "Mark the given room id as safe" },
+      { cmd = "mapper saferoom <roomId> on/off", desc = "Toggle the safe flag on the given room id" },
     }
   },
   ['exits'] = {
@@ -111,6 +115,7 @@ mm.help_table = {
       { cmd = "mapper portal <command> level <number>", desc = "Link a handheld portal to the current room as a special exit from everwhere else. The level suffix is required (ex: 'mapper portal recall level 50'). To stack commands use ;; as separator (ex: 'mapper portal hold amulet;;enter level 50')." },
       { cmd = "mapper fullportal {<command>} {<room_id>} <level> (quiet)", desc = "Set all portal aspects in one command without being there." },
       { cmd = "mapper portalrecall <index>", desc = "Flag/unflag a portal as using a recall or home command, to avoid using it in identified norecall rooms. Find the indices with 'mapper portals'" },
+      { cmd = "mapper chaosportal <index>", desc = "Toggle chaos flag on a non-recall portal. Chaos portals are ignored while actively on global quest and cannot be set as recall/bounce portals. Find the indices with 'mapper portals'" },
       { cmd = "mapper bounceportal <index>", desc = "Specifies which non-recall mapper portal to bounce through when the path calculation wants to recall or home from a portal-friendly norecall room. For this to work properly you must indicate which mapper portals use recall or home with the portalrecall command listed above. Find the indices with 'mapper portals'" },
       { cmd = "mapper bouncerecall <index>", desc = "Specifies which home/recall mapper portal to bounce through when the path calculation wants to portal from a recall-friendly noportal room. You may only choose a portal that has been marked as being a recall portal using the portalrecall command listed above. Find the indices with 'mapper portals'" },
       { cmd = "mapper bounceportal", desc = "Display the current bounce portal" },

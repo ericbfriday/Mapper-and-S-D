@@ -603,22 +603,121 @@ end
 -- @param mobName Mob name to search for
 -- @param zone Optional area to limit search
 -- @return Table of room records
-function snd.db.getMobLocations(mobName, zone)
+function snd.db.getMobLocations(mobName, zone, opts)
     if not mobName then return {} end
+    opts = opts or {}
+    local useLegacySql = opts.legacy == true
+    local roomHint = snd.utils and snd.utils.trim and snd.utils.trim(opts.roomHint or "") or tostring(opts.roomHint or "")
 
     local function fetchLocations(name)
         local sql
         if zone and zone ~= "" then
-            sql = string.format(
-                "SELECT * FROM mobs WHERE lower(mob) = lower(%s) AND zone = %s ORDER BY seen_count DESC, kill_count DESC",
-                snd.db.escape(name),
-                snd.db.escape(zone)
-            )
+            if useLegacySql then
+                sql = string.format(
+                    "SELECT * FROM mobs WHERE lower(mob) = lower(%s) AND zone = %s ORDER BY seen_count DESC, kill_count DESC",
+                    snd.db.escape(name),
+                    snd.db.escape(zone)
+                )
+            else
+                if roomHint ~= "" then
+                    sql = string.format([[
+                        SELECT * FROM (
+                            SELECT m.*,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY lower(m.mob), lower(m.zone)
+                                       ORDER BY m.seen_count DESC, m.kill_count DESC, m.roomid ASC
+                                   ) AS rn
+                            FROM (
+                                SELECT * FROM mobs
+                                WHERE lower(mob) = lower(%s)
+                                  AND lower(zone) = lower(%s)
+                                  AND lower(room) = lower(%s)
+                            ) m
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY seen_count DESC, kill_count DESC, roomid ASC
+                    ]],
+                        snd.db.escape(name),
+                        snd.db.escape(zone),
+                        snd.db.escape(roomHint)
+                    )
+                else
+                    --[[
+                    sql = string.format(
+                        "SELECT * FROM mobs WHERE lower(mob) = lower(%s) AND zone = %s ORDER BY seen_count DESC, kill_count DESC",
+                        snd.db.escape(name),
+                        snd.db.escape(zone)
+                    )
+                    ]]
+                    sql = string.format([[
+                        SELECT * FROM (
+                            SELECT m.*,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY lower(m.mob), lower(m.zone)
+                                       ORDER BY m.seen_count DESC, m.kill_count DESC, m.roomid ASC
+                                   ) AS rn
+                            FROM mobs m
+                            WHERE lower(m.mob) = lower(%s) AND lower(m.zone) = lower(%s)
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY seen_count DESC, kill_count DESC, roomid ASC
+                    ]],
+                        snd.db.escape(name),
+                        snd.db.escape(zone)
+                    )
+                end
+            end
         else
-            sql = string.format(
-                "SELECT * FROM mobs WHERE lower(mob) = lower(%s) ORDER BY seen_count DESC, kill_count DESC",
-                snd.db.escape(name)
-            )
+            if useLegacySql then
+                sql = string.format(
+                    "SELECT * FROM mobs WHERE lower(mob) = lower(%s) ORDER BY seen_count DESC, kill_count DESC",
+                    snd.db.escape(name)
+                )
+            else
+                if roomHint ~= "" then
+                    sql = string.format([[
+                        SELECT * FROM (
+                            SELECT m.*,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY lower(m.mob), lower(m.zone)
+                                       ORDER BY m.seen_count DESC, m.kill_count DESC, m.roomid ASC
+                                   ) AS rn
+                            FROM (
+                                SELECT * FROM mobs
+                                WHERE lower(mob) = lower(%s)
+                                  AND lower(room) = lower(%s)
+                            ) m
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY seen_count DESC, kill_count DESC, roomid ASC
+                    ]],
+                        snd.db.escape(name),
+                        snd.db.escape(roomHint)
+                    )
+                else
+                    --[[
+                    sql = string.format(
+                        "SELECT * FROM mobs WHERE lower(mob) = lower(%s) ORDER BY seen_count DESC, kill_count DESC",
+                        snd.db.escape(name)
+                    )
+                    ]]
+                    sql = string.format([[
+                        SELECT * FROM (
+                            SELECT m.*,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY lower(m.mob), lower(m.zone)
+                                       ORDER BY m.seen_count DESC, m.kill_count DESC, m.roomid ASC
+                                   ) AS rn
+                            FROM mobs m
+                            WHERE lower(m.mob) = lower(%s)
+                        ) ranked
+                        WHERE rn = 1
+                        ORDER BY seen_count DESC, kill_count DESC, roomid ASC
+                    ]],
+                        snd.db.escape(name)
+                    )
+                end
+            end
         end
 
         return snd.db.query(sql) or {}

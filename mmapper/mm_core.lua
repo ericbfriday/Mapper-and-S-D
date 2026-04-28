@@ -142,6 +142,7 @@ local function sanitize_deleted_portal_entry(entry)
     touid = touid,
     command = command,
     level = tonumber(entry.level) or 0,
+    chaos = (tostring(entry.chaos or "no") == "yes") and "yes" or "no",
     area = tostring(entry.area or ""),
     room_name = tostring(entry.room_name or ""),
     deleted_at = tonumber(entry.deleted_at) or os.time(),
@@ -189,6 +190,7 @@ local function sanitize_rebuilt_portal_entry(entry)
     portal_id = portal_id,
     command = command,
     level = tonumber(entry.level) or 0,
+    chaos = (tostring(entry.chaos or "no") == "yes") and "yes" or "no",
     touid = entry.touid ~= nil and tostring(entry.touid) or nil,
     fromuid = entry.fromuid ~= nil and tostring(entry.fromuid) or "*",
     leadsto = entry.leadsto ~= nil and tostring(entry.leadsto) or nil,
@@ -294,6 +296,11 @@ function mm.is_portal_recall(portal)
   return mm.portals.settings.recall_ids[tostring(portal.portal_id)] == true
 end
 
+function mm.is_portal_chaos(portal)
+  if not portal then return false end
+  return tostring(portal.chaos or "no") == "yes"
+end
+
 function mm.set_portal_recall(index, explicit_state)
   ensure_portal_settings()
   local portal, err = get_portal_by_index(index)
@@ -307,10 +314,71 @@ function mm.set_portal_recall(index, explicit_state)
   else
     next_state = explicit_state == true
   end
+  if next_state and mm.is_portal_chaos(portal) then
+    return false, "portal is marked as chaos; toggle chaos off before marking it as recall"
+  end
   mm.portals.settings.recall_ids[id] = next_state or nil
   if not next_state and mm.portals.settings.bounce_recall_id == id then
     mm.portals.settings.bounce_recall_id = nil
   end
+  return mm.save_portal_persistence()
+end
+
+function mm.set_portal_chaos(index, explicit_state)
+  ensure_portal_settings()
+  local ensured, ensure_err = mm.ensure_exits_chaos_column()
+  if not ensured then
+    return false, "failed ensuring exits.chaos column: " .. tostring(ensure_err)
+  end
+  local portal, err = get_portal_by_index(index)
+  if not portal then
+    return false, err
+  end
+  if mm.is_portal_recall(portal) then
+    return false, "chaos can only be toggled on non-recall portals"
+  end
+
+  local current = mm.is_portal_chaos(portal)
+  local next_state = (explicit_state == nil) and (not current) or (explicit_state == true)
+  local next_chaos = next_state and "yes" or "no"
+  local fromuid = tostring(portal.fromuid or (portal.fixed_recall and "**" or "*"))
+  local command = tostring(portal.command or "")
+  local touid = tostring(portal.touid or portal.target_uid or "")
+  if command == "" or touid == "" then
+    return false, "selected portal row is missing required fields"
+  end
+
+  local ok, qerr = mm.exec_mapper_db(string.format(
+    "UPDATE exits SET chaos=%s WHERE fromuid=%s AND dir=%s AND touid=%s",
+    mm.sql_escape(next_chaos),
+    mm.sql_escape(fromuid),
+    mm.sql_escape(command),
+    mm.sql_escape(touid)
+  ))
+  if not ok then
+    return false, qerr
+  end
+
+  local id = tostring(portal.portal_id)
+  if next_state then
+    mm.portals.settings.recall_ids[id] = nil
+    if mm.portals.settings.bounce_portal_id == id then
+      mm.portals.settings.bounce_portal_id = nil
+    end
+    if mm.portals.settings.bounce_recall_id == id then
+      mm.portals.settings.bounce_recall_id = nil
+    end
+  end
+
+  local portals = mm.portals and mm.portals.rebuilt or {}
+  for _, entry in ipairs(portals) do
+    if tostring(entry.fromuid or "") == fromuid
+      and tostring(entry.command or "") == command
+      and tostring(entry.touid or entry.target_uid or "") == touid then
+      entry.chaos = next_chaos
+    end
+  end
+  mm.apply_bounce_settings_to_snd()
   return mm.save_portal_persistence()
 end
 
@@ -354,6 +422,9 @@ function mm.set_bounce_portal(index)
   if mm.is_portal_recall(portal) then
     return false, "bounceportal must be a non-recall portal; use mapper portalrecall to unflag it first"
   end
+  if mm.is_portal_chaos(portal) then
+    return false, "bounceportal cannot be set to a chaos portal; toggle chaos off first"
+  end
   mm.portals.settings.bounce_portal_id = tostring(portal.portal_id)
   local ok, save_err = mm.save_portal_persistence()
   if not ok then return false, save_err end
@@ -377,6 +448,9 @@ function mm.set_bounce_recall(index)
   end
   if not mm.is_portal_recall(portal) then
     return false, "bouncerecall must be set to a portal flagged as recall via mapper portalrecall"
+  end
+  if mm.is_portal_chaos(portal) then
+    return false, "bouncerecall cannot be set to a chaos portal; toggle chaos off first"
   end
   mm.portals.settings.bounce_recall_id = tostring(portal.portal_id)
   local ok, save_err = mm.save_portal_persistence()
@@ -801,11 +875,15 @@ function mm.print_room_details(room)
     mm.note("Terrain: " .. tostring(info.terrain or "?"))
   end
 
-  local rows = mm.query_mapper_db(string.format("SELECT noportal, norecall FROM rooms WHERE uid = %d LIMIT 1", room), "Aardwolf.db") or {}
+  local rows = mm.query_mapper_db(string.format("SELECT noportal, norecall, info FROM rooms WHERE uid = %d LIMIT 1", room), "Aardwolf.db") or {}
   if rows[1] then
     local noportal = tonumber(rows[1].noportal) == 1 and "yes" or "no"
     local norecall = tonumber(rows[1].norecall) == 1 and "yes" or "no"
-    mm.note(string.format("Flags: noportal=%s, norecall=%s", noportal, norecall))
+    local isSafe = snd and snd.mapper and snd.mapper.infoContainsSafe and snd.mapper.infoContainsSafe(rows[1].info)
+    mm.note(string.format("Flags: noportal=%s, norecall=%s, %s", noportal, norecall, isSafe and "safe" or "not-safe"))
+    if rows[1].info and tostring(rows[1].info) ~= "" then
+      mm.note("Info: " .. tostring(rows[1].info))
+    end
   end
 end
 
@@ -944,6 +1022,34 @@ function mm.exec_mapper_db(sql, db_path)
   conn:close()
   env:close()
   if not ok then return false, tostring(err) end
+  return true
+end
+
+function mm.ensure_exits_chaos_column()
+  local rows, err = mm.query_mapper_db("PRAGMA table_info('exits')")
+  if not rows then
+    return false, err
+  end
+
+  local has_chaos = false
+  for _, row in ipairs(rows) do
+    if tostring(row.name or "") == "chaos" then
+      has_chaos = true
+      break
+    end
+  end
+
+  if not has_chaos then
+    local ok, alter_err = mm.exec_mapper_db("ALTER TABLE exits ADD COLUMN chaos TEXT NOT NULL DEFAULT 'no'")
+    if not ok then
+      return false, alter_err
+    end
+  end
+
+  local ok, upd_err = mm.exec_mapper_db("UPDATE exits SET chaos='no' WHERE chaos IS NULL OR trim(chaos) = ''")
+  if not ok then
+    return false, upd_err
+  end
   return true
 end
 
@@ -1089,8 +1195,12 @@ end
 
 function mm.rebuild_portals_from_db()
   ensure_portal_settings()
+  local chaos_ok, chaos_err = mm.ensure_exits_chaos_column()
+  if not chaos_ok then
+    return false, "failed ensuring exits.chaos column: " .. tostring(chaos_err)
+  end
   local rows, err = mm.query_mapper_db([[
-    SELECT dir, level, touid, fromuid
+    SELECT dir, level, touid, fromuid, ifnull(chaos, 'no') AS chaos
     FROM exits
     WHERE LOWER(dir) LIKE 'dinv portal use %'
       OR fromuid IN ('*', '**')
@@ -1131,6 +1241,7 @@ function mm.rebuild_portals_from_db()
         portal_id = tostring(portal_id),
         command = command,
         level = tonumber(row.level) or 0,
+        chaos = (tostring(row.chaos or "no") == "yes") and "yes" or "no",
         touid = touid,
         fromuid = fromuid,
         leadsto = leadsto,
@@ -1196,6 +1307,18 @@ function mm.rebuild_portals_from_db()
   end
   if mm.portals.settings.bounce_recall_id and not valid_ids[tostring(mm.portals.settings.bounce_recall_id)] then
     mm.portals.settings.bounce_recall_id = nil
+  end
+  if mm.portals.settings.bounce_portal_id then
+    local bp = find_portal_by_id(mm.portals.settings.bounce_portal_id)
+    if bp and mm.is_portal_chaos(bp) then
+      mm.portals.settings.bounce_portal_id = nil
+    end
+  end
+  if mm.portals.settings.bounce_recall_id then
+    local br = find_portal_by_id(mm.portals.settings.bounce_recall_id)
+    if br and mm.is_portal_chaos(br) then
+      mm.portals.settings.bounce_recall_id = nil
+    end
   end
 
   if snd and snd.config and snd.config.mapper then
@@ -1380,13 +1503,14 @@ function mm.print_portals(area_arg)
 
   for _, p in ipairs(selected) do
     local is_recall = mm.is_portal_recall(p)
-    local type_color = is_recall and "light_sky_blue" or "yellow"
-    local command_color = is_recall and "light_sky_blue" or "light_slate_blue"
+    local is_chaos = mm.is_portal_chaos(p)
+    local type_color = is_chaos and "medium_purple" or (is_recall and "light_sky_blue" or "yellow")
+    local command_color = is_chaos and "medium_purple" or (is_recall and "light_sky_blue" or "light_slate_blue")
     cecho(string.format(
       "<deep_sky_blue>%-3s <%s>%-8s <light_grey>%-25s <white>%-42s <%s>%-33s <khaki>%5d<reset>",
       tostring(p.nr or "?"),
       type_color,
-      is_recall and "Recall" or "Portal",
+      is_chaos and "Chaos" or (is_recall and "Recall" or "Portal"),
       fit(p.area or "?", 25),
       fit(p.room_name or "?", 42),
       command_color,
@@ -1983,6 +2107,7 @@ function mm.delete_portal_by_index(index)
     touid = touid,
     command = command,
     level = tonumber(portal.level) or 0,
+    chaos = tostring(portal.chaos or "no"),
     area = tostring(portal.area or ""),
     room_name = tostring(portal.room_name or ""),
     deleted_at = os.time(),
@@ -2043,11 +2168,12 @@ function mm.restore_portal(which)
     return false, "RESTORE PORTAL ERROR: invalid portal type in history"
   end
   local ok, err = mm.exec_mapper_db(string.format(
-    "INSERT OR REPLACE INTO exits (fromuid, dir, touid, level) VALUES (%s, %s, %s, %d)",
+    "INSERT OR REPLACE INTO exits (fromuid, dir, touid, level, chaos) VALUES (%s, %s, %s, %d, %s)",
     mm.sql_escape(fromuid),
     mm.sql_escape(tostring(row.command or "")),
     mm.sql_escape(tostring(row.touid or "")),
-    tonumber(row.level) or 0
+    tonumber(row.level) or 0,
+    mm.sql_escape(tostring(row.chaos or "no"))
   ))
   if not ok then return false, err end
 

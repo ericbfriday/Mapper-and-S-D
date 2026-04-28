@@ -1095,6 +1095,8 @@ function snd.gui.updateTargetList()
                     color = TC.unknownDead
                 elseif v.dead then
                     color = TC.dead
+                elseif v.lowConfidence then
+                    color = TC.unlikely
                 elseif (not v.arid or v.arid == "") and v.loc and v.loc ~= "" then
                     color = TC.unknown
                 end
@@ -1146,6 +1148,8 @@ function snd.gui.updateTargetList()
                 local numberColor = color
                 if isTargeted or isFighting then
                     numberColor = TC.targeted
+                elseif v.lowConfidence then
+                    numberColor = TC.unlikely
                 elseif v.activity == "gq" then
                     numberColor = TC.gqTab
                 elseif v.activity == "cp" then
@@ -1189,8 +1193,10 @@ function snd.gui.updateTargetList()
             writeTargetText(TC.gray .. "No targets\n\n")
             writeTargetText(TC.gray .. "Use 'campaign request' to populate.\n")
             local canTakeAnotherCampaign = snd.campaign and snd.campaign.canGetNew
-            if canTakeAnotherCampaign then
+            if canTakeAnotherCampaign == true then
                 writeTargetText(TC.questAvail .. "\nYou can take another campaign at your level.\n")
+            elseif canTakeAnotherCampaign == false then
+                writeTargetText(TC.gray .. "\nYou will have to level before you can go on another campaign.\n")
             end
             if snd.cp and snd.cp.normalizeCampaignTodayCounter then
                 snd.cp.normalizeCampaignTodayCounter()

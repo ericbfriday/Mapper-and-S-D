@@ -437,21 +437,36 @@ function mm.show_room_note(room_id, info, source)
 
   mm.runtime = mm.runtime or {}
   local ts = now_millis()
-  local dedupe_key = tostring(room_id or "") .. "::" .. tostring(room_note or "")
-  local last_key = tostring(mm.runtime.last_note_key or "")
-  local last_ts = tonumber(mm.runtime.last_note_ts or -100000) or -100000
-  if dedupe_key == last_key and (ts - last_ts) <= 600 then
-    mm.debug("suppressed duplicate room note (" .. tostring(source or "unknown") .. ")")
-    return false
+  -- Mudlet may emit duplicate gmcp.room.info events for the same room payload.
+  -- Keep a tiny de-dupe window for those duplicate events only, but always show
+  -- notes triggered by explicit "look" parsing hooks such as coords_line.
+  local note_source = tostring(source or "unknown")
+  if note_source ~= "coords_line" then
+    local dedupe_key = tostring(room_id or "") .. "::" .. tostring(room_note or "") .. "::" .. note_source
+    local last_key = tostring(mm.runtime.last_note_key or "")
+    local last_ts = tonumber(mm.runtime.last_note_ts or -100000) or -100000
+    if dedupe_key == last_key and (ts - last_ts) <= 150 then
+      mm.debug("suppressed duplicate room note (" .. note_source .. ")")
+      return false
+    end
+    mm.runtime.last_note_key = dedupe_key
+    mm.runtime.last_note_ts = ts
   end
 
-  if mm.room_note then
-    mm.room_note("Room note: " .. room_note)
-  else
-    mm.note("Room note: " .. room_note)
+  -- Defer one tick so the room title line is already printed, avoiding the
+  -- note being concatenated onto the same row as the room name.
+  local emit_note = function()
+    if mm.room_note then
+      mm.room_note("Room note: " .. room_note)
+    else
+      mm.note("Room note: " .. room_note)
+    end
   end
-  mm.runtime.last_note_key = dedupe_key
-  mm.runtime.last_note_ts = ts
+  if type(tempTimer) == "function" then
+    tempTimer(0, emit_note)
+  else
+    emit_note()
+  end
   return true
 end
 

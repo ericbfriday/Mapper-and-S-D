@@ -24,6 +24,8 @@ CW.lastEnemy = CW.lastEnemy or ""
 CW.nextMobId = CW.nextMobId or 0
 CW.killsSinceRefresh = CW.killsSinceRefresh or 0
 CW.currentEnemyMobId = CW.currentEnemyMobId or nil
+CW.lastKnownEnemyPct = CW.lastKnownEnemyPct or nil
+CW.lastTrackedMobId = CW.lastTrackedMobId or nil
 
 local consider_map = {
     {[[^(\(.+\) ?)?(.+) looks a little worried about the idea\.$]], "chartreuse", "-2 to -4"},
@@ -124,14 +126,25 @@ end
 function CW.clear(_reason)
     CW.mobs = {}
     CW.killsSinceRefresh = 0
+    CW.currentEnemyMobId = nil
+    CW.lastKnownEnemyPct = nil
+    CW.lastTrackedMobId = nil
     CW.render()
+end
+
+function CW.isCurrentRoomSafe()
+    local details = gmcp_get("room.info.details")
+    if details ~= nil and tokenizedContainsSafe(details) then return true end
+    local roomId = tostring(gmcp_get("room.info.num") or "")
+    if roomId ~= "" and snd.mapper and type(snd.mapper.isSafeRoom) == "function" then
+        if snd.mapper.isSafeRoom(roomId) then return true end
+    end
+    return false
 end
 
 function CW.shouldClearForSafeRoom()
     if not cfg().clearOnSafe then return false end
-    local details = gmcp_get("room.info.details")
-    if tokenizedContainsSafe(details) then return true end
-    return false
+    return CW.isCurrentRoomSafe()
 end
 
 function CW.activityMarkersForMob(name)
@@ -343,9 +356,11 @@ function CW.render()
     local matchingEnemyCount = 0
     if activeEnemy ~= "" then
         for _, m in ipairs(CW.mobs) do
-            local mobName = normalizeMobName(m.name)
-            if mobName == activeEnemy or mobName:find(activeEnemy, 1, true) or activeEnemy:find(mobName, 1, true) then
-                matchingEnemyCount = matchingEnemyCount + 1
+            if not m.dead then
+                local mobName = normalizeMobName(m.name)
+                if mobName == activeEnemy or mobName:find(activeEnemy, 1, true) or activeEnemy:find(mobName, 1, true) then
+                    matchingEnemyCount = matchingEnemyCount + 1
+                end
             end
         end
     end
@@ -356,7 +371,7 @@ function CW.render()
         local markerSuffix = formatMarkersColored(marker)
         local sword = ""
         local mobName = normalizeMobName(m.name)
-        local nameMatchesEnemy = activeEnemy ~= "" and
+        local nameMatchesEnemy = activeEnemy ~= "" and not m.dead and
             (mobName == activeEnemy or mobName:find(activeEnemy, 1, true) or activeEnemy:find(mobName, 1, true))
         local isFocusedEnemy = CW.currentEnemyMobId and (m.id == CW.currentEnemyMobId)
         local isActive = false
@@ -511,13 +526,15 @@ function CW.onRoomInfo()
         CW.lastRoomId = roomId
     end
 
-    if CW.shouldClearForSafeRoom() then
+    if not moved or not cfg().enabled then return end
+    local mode = tostring(cfg().mode or "consider"):lower()
+    if mode ~= "consider" and mode ~= "scan" then return end
+
+    if CW.isCurrentRoomSafe() then
         CW.clear("safe-room")
         return
     end
 
-    if not moved or not cfg().enabled then return end
-    local mode = tostring(cfg().mode or "consider"):lower()
     if mode == "consider" then
         CW.refresh("auto")
     elseif mode == "scan" then
@@ -600,6 +617,7 @@ function CW.onCharStatus()
             end
         end
         CW.currentEnemyMobId = nil
+        CW.lastKnownEnemyPct = nil
         if matched then
             CW.killsSinceRefresh = (tonumber(CW.killsSinceRefresh) or 0) + 1
         end
@@ -626,22 +644,57 @@ function CW.onCharStatus()
             CW.render()
         end
     else
-        if hasEnemy and not CW.currentEnemyMobId then
-            local strictFocus = cfg().strictFocusIdOnly and true or false
-            local aliveMatches = countAliveByNormalizedName(enemyNow)
-            if not (strictFocus and aliveMatches > 1) then
+        local phantomKill = false
+        if CW.currentEnemyMobId ~= CW.lastTrackedMobId then
+            CW.lastKnownEnemyPct = nil
+        end
+        if hasEnemy then
+            local enemyPct = clamp(gmcp_get("char.status.enemypct") or 100, 0, 100)
+            if CW.currentEnemyMobId and prevEnemy == enemyNow
+                    and CW.lastKnownEnemyPct and CW.lastKnownEnemyPct < 30
+                    and enemyPct > CW.lastKnownEnemyPct + 50
+                    and countAliveByNormalizedName(enemyNow) > 1 then
                 for _, m in ipairs(CW.mobs) do
-                    if not m.dead and normalizeMobName(m.name) == enemyNow then
-                        CW.currentEnemyMobId = m.id
+                    if m.id == CW.currentEnemyMobId and not m.dead and normalizeMobName(m.name) == enemyNow then
+                        m.dead = true
+                        CW.killsSinceRefresh = (tonumber(CW.killsSinceRefresh) or 0) + 1
+                        phantomKill = true
+                        local killedName = trim(m.name or "")
+                        if killedName ~= "" and snd.db and snd.room and snd.room.current and snd.room.current.rmid then
+                            snd.db.recordMobKill(killedName, snd.room.current.rmid, snd.room.current.name, snd.room.current.arid)
+                        end
                         break
                     end
                 end
+                if phantomKill then
+                    CW.currentEnemyMobId = nil
+                end
             end
+            CW.lastKnownEnemyPct = enemyPct
+            if not CW.currentEnemyMobId then
+                local strictFocus = cfg().strictFocusIdOnly and true or false
+                local aliveMatches = countAliveByNormalizedName(enemyNow)
+                if not (strictFocus and aliveMatches > 1) then
+                    for _, m in ipairs(CW.mobs) do
+                        if not m.dead and normalizeMobName(m.name) == enemyNow then
+                            CW.currentEnemyMobId = m.id
+                            break
+                        end
+                    end
+                end
+            end
+        else
+            CW.lastKnownEnemyPct = nil
         end
-        -- Keep sword marker current while fighting/changing target.
-        CW.render()
+        local threshold = math.max(0, math.floor(tonumber(cfg().repopulate) or 0))
+        if phantomKill and threshold > 0 and CW.killsSinceRefresh >= threshold and cfg().enabled and tostring(cfg().mode or "consider"):lower() == "consider" then
+            CW.refresh("auto")
+        else
+            CW.render()
+        end
     end
     CW.lastEnemy = enemyNow
+    CW.lastTrackedMobId = CW.currentEnemyMobId
 end
 
 function CW.onPrompt()

@@ -367,7 +367,7 @@ function snd.mapper.getRoomInfo(roomId)
     if not roomId then return nil end
     
     local sql = string.format(
-        "SELECT uid, name, area, norecall, noportal FROM rooms WHERE uid = %s",
+        "SELECT uid, name, area, norecall, noportal, info FROM rooms WHERE uid = %s",
         snd.mapper.db.escape(tostring(roomId))
     )
     
@@ -436,6 +436,64 @@ function snd.mapper.persistDiscoveredRoom(roomInfo)
         end
     end
 
+    return true
+end
+
+local function tokenizeInfo(info)
+    local tokens = {}
+    local v = tostring(info or "")
+    if v == "" then return tokens end
+    for item in v:gmatch("[^,]+") do
+        local clean = item:gsub("^%s+", ""):gsub("%s+$", "")
+        if clean ~= "" then table.insert(tokens, clean) end
+    end
+    return tokens
+end
+
+function snd.mapper.infoContainsSafe(info)
+    for _, token in ipairs(tokenizeInfo(info)) do
+        if token:lower() == "safe" then return true end
+    end
+    return false
+end
+
+function snd.mapper.isSafeRoom(roomId)
+    local room = snd.mapper.getRoomInfo(roomId)
+    if not room then return false end
+    return snd.mapper.infoContainsSafe(room.info)
+end
+
+function snd.mapper.markRoomSafe(roomId, value)
+    if not roomId then return false end
+    if not snd.mapper.db.open() then return false end
+    local room = snd.mapper.getRoomInfo(roomId)
+    if not room then return false end
+    local tokens = tokenizeInfo(room.info)
+    local has = false
+    for _, t in ipairs(tokens) do
+        if t:lower() == "safe" then has = true; break end
+    end
+    local newTokens = {}
+    if value == false then
+        if not has then return true end
+        for _, t in ipairs(tokens) do
+            if t:lower() ~= "safe" then table.insert(newTokens, t) end
+        end
+    else
+        if has then return true end
+        for _, t in ipairs(tokens) do table.insert(newTokens, t) end
+        table.insert(newTokens, "safe")
+    end
+    local newInfo = table.concat(newTokens, ",")
+    local ok, err = snd.mapper.db.conn:execute(string.format(
+        "UPDATE rooms SET info = %s WHERE uid = %s",
+        snd.mapper.db.escape(newInfo),
+        snd.mapper.db.escape(tostring(roomId))
+    ))
+    if not ok then
+        snd.utils.debugNote("Failed to update info flag: " .. tostring(err))
+        return false
+    end
     return true
 end
 
@@ -992,11 +1050,13 @@ function snd.mapper.findPath(src, dst, noPortals, noRecalls, ignoreLockedExits)
     -- Get player level for level-locked exits
     local myLevel = snd.char.level or 201
     local myTier = snd.char.tier or 0
+    local gqActive = snd.gquest and snd.gquest.active == true
     local levelWhere = ignoreLockedExits and "1=1" or string.format(
         "((fromuid NOT IN ('*','**') AND level <= %d) OR (fromuid IN ('*','**') AND level <= %d))",
         myLevel,
         myLevel + (myTier * 10)
     )
+    local chaosWhere = gqActive and "(fromuid <> '*' OR ifnull(chaos, 'no') <> 'yes')" or "1=1"
     
     -- Check for direct one-room path first
     local directPath = snd.mapper.checkDirectPath(src, dst, myLevel, ignoreLockedExits)
@@ -1049,8 +1109,9 @@ function snd.mapper.findPath(src, dst, noPortals, noRecalls, ignoreLockedExits)
             WHERE touid IN (%s) 
             AND fromuid NOT IN (%s) 
             AND %s
+            AND %s
             ORDER BY length(dir) ASC
-        ]], table.concat(roomsList, ","), visited, levelWhere)
+        ]], table.concat(roomsList, ","), visited, levelWhere, chaosWhere)
         
         local results = snd.mapper.db.query(sql) or {}
         roomSets[depth] = {}
@@ -2172,12 +2233,12 @@ function snd.mapper.gotoRoom(roomId, usePortals, ignoreLockedExits, iterativeMod
             return true
         end
     end
-    
+
     local path, depth = snd.mapper.findPath(currentRoom, roomId, noPortals, noRecalls, ignoreLockedExits)
-    
+
     if path and #path > 0 then
         snd.utils.debugNote("Found path with " .. #path .. " steps (depth " .. depth .. ")")
-        
+
         -- Store destination for arrival detection
         snd.mapper.goingToRoom = roomId
         snd.nav.goingToRoom = roomId
