@@ -773,23 +773,40 @@ end
 -- @return Area key (e.g., "artificer") or nil
 function snd.db.getAreaKeyFromName(areaName)
     if not areaName or areaName == "" then return nil end
-    
+
+    local trimmed = snd.utils and snd.utils.trim and snd.utils.trim(areaName) or tostring(areaName)
     local sql = string.format(
-        "SELECT key FROM area WHERE name = %s",
-        snd.db.escape(areaName)
+        "SELECT key FROM area WHERE lower(name) = lower(%s)",
+        snd.db.escape(trimmed)
     )
-    
+
     local results = snd.db.query(sql)
     if results and #results > 0 then
         return results[1].key
     end
-    
+
+    -- Tolerate punctuation/spacing drift between campaign output and area table,
+    -- e.g. "Necromancers' Guild" vs "Necromancer's Guild".
+    local normalized = tostring(trimmed):lower():gsub("[^%w]", "")
+    if normalized ~= "" then
+        sql = string.format(
+            "SELECT key FROM area " ..
+            "WHERE lower(replace(replace(replace(replace(name, '''', ''), ' ', ''), '-', ''), '_', '')) = %s " ..
+            "LIMIT 1",
+            snd.db.escape(normalized)
+        )
+        results = snd.db.query(sql)
+        if results and #results > 0 then
+            return results[1].key
+        end
+    end
+
     -- Try partial match if exact match fails
     sql = string.format(
-        "SELECT key FROM area WHERE name LIKE %s",
-        snd.db.escape("%" .. areaName .. "%")
+        "SELECT key FROM area WHERE lower(name) LIKE lower(%s)",
+        snd.db.escape("%" .. trimmed .. "%")
     )
-    
+
     results = snd.db.query(sql)
     if results and #results > 0 then
         return results[1].key

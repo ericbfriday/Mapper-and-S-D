@@ -502,6 +502,11 @@ function snd.cp.startCpCheck()
     snd.cp.parsing.checkActive = true
     snd.cp.parsing.tempTargets = {}
     snd.campaign.checkList = {}
+    -- cp check output refreshes campaign status only; it should not inherit
+    -- stale nx/xcp-mode state from prior navigation and accidentally fire qw/ht.
+    if snd.nav then
+        snd.nav.nxState = nil
+    end
 end
 
 --- Process a cp check target line
@@ -629,13 +634,13 @@ function snd.cp.resolveZonesForTarget(target, playerLevel)
         local maxLvl = tonumber(area and area.maxlvl) or 0
         if not levelKnown then return true end
         if minLvl == 0 and maxLvl == 0 then return true end
-        return maxLvl > playerLevel and playerLevel > minLvl
+        return playerLevel >= minLvl and playerLevel <= (maxLvl + 25)
     end
 
     local function tryMapperFallback()
         if hint == "" then return nil end
         if not (snd.mapper and snd.mapper.searchRoomsExact) then return nil end
-        local ok, rows = pcall(snd.mapper.searchRoomsExact, hint, "", target.mob, {})
+        local ok, rows = pcall(snd.mapper.searchRoomsExact, hint, "", target.mob, { silent = true })
         if not ok or type(rows) ~= "table" or #rows == 0 then return nil end
         local seenZone = {}
         local results = {}
@@ -758,7 +763,7 @@ function snd.cp.resolveZonesForTarget(target, playerLevel)
             "CP filter: dropped '%s' — no zone fits level %d (mob in %d zone(s) total)",
             tostring(target.mob), playerLevel, #zoneOrder
         ))
-        return tryMapperFallback() or {}
+        return tryMapperFallback() or fallback
     end
 
     if hint ~= "" and #kept > 1 then
@@ -772,6 +777,72 @@ function snd.cp.resolveZonesForTarget(target, playerLevel)
 
 
     return kept
+end
+
+--- Keep scoped/current CP target aligned with the rebuilt CP target list.
+-- Clears stale selections so follow-up actions do not operate on removed mobs.
+function snd.cp.reconcileSelectionAfterRebuild()
+    local cpEntries = {}
+    for _, entry in ipairs(snd.targets.list or {}) do
+        if entry.activity == "cp" and not entry.dead then
+            table.insert(cpEntries, entry)
+        end
+    end
+
+    local function matchesEntry(selection, entry)
+        if type(selection) ~= "table" or type(entry) ~= "table" then
+            return false
+        end
+
+        local selMob = tostring(selection.name or selection.mob or ""):lower()
+        local entryMob = tostring(entry.mob or ""):lower()
+        if selMob == "" or entryMob == "" or selMob ~= entryMob then
+            return false
+        end
+
+        local selArea = tostring(selection.areaName or selection.loc or selection.area or ""):lower()
+        local entryArea = tostring(entry.loc or entry.areaName or entry.area or ""):lower()
+        if selArea ~= "" and entryArea ~= "" and selArea ~= entryArea then
+            return false
+        end
+
+        return true
+    end
+
+    local function selectionStillValid(selection)
+        if type(selection) ~= "table" then
+            return false
+        end
+        if selection.activity ~= "cp" then
+            return true
+        end
+        for _, entry in ipairs(cpEntries) do
+            if matchesEntry(selection, entry) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local clearedScoped = false
+    local clearedCurrent = false
+
+    if snd.targets and snd.targets.scoped and snd.targets.scoped.cp and not selectionStillValid(snd.targets.scoped.cp) then
+        snd.targets.scoped.cp = nil
+        clearedScoped = true
+    end
+
+    if snd.targets and snd.targets.current and snd.targets.current.activity == "cp"
+        and not selectionStillValid(snd.targets.current) then
+        snd.targets.current = nil
+        clearedCurrent = true
+    end
+
+    if (clearedScoped or clearedCurrent)
+        and snd.nav and snd.nav.clearActivityQuickWhere then
+        snd.nav.clearActivityQuickWhere("cp")
+        snd.utils.debugNote("CP reconcile: cleared stale CP selection/navigation state")
+    end
 end
 
 --- Build the main target list from campaign targets
@@ -791,75 +862,122 @@ function snd.cp.buildMainTargetList()
     local lowEntries = {}
 
     for i, target in ipairs(snd.campaign.targets) do
-        if not target.dead then
-            local resolved = snd.cp.resolveZonesForTarget(target, playerLevel)
-            local visible = {}
-            for _, zone in ipairs(resolved) do
-                local arid = zone.arid or ""
-                local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, arid) or nil
-                if not (tags and tags.nowhere) then
-                    zone.tags = tags
-                    table.insert(visible, zone)
-                end
-            end
-            local total = #visible
-            for j, zone in ipairs(visible) do
-                local arid = zone.arid or ""
-                local roomName = ""
-                if zone.fromDb and zone.roomName and zone.roomName ~= "" then
-                    roomName = zone.roomName
-                    emittedAnyRoomTarget = true
-                elseif zone.fromMapper and zone.roomName and zone.roomName ~= "" then
-                    roomName = zone.roomName
-                    emittedAnyRoomTarget = true
-                elseif snd.campaign.targetType == "room" and not zone.fromDb and target.loc and target.loc ~= "" then
-                    roomName = target.loc
-                end
-
-                local entry = {
-                    mob = target.mob,
-                    loc = zone.areaName or target.loc or "",
-                    arid = arid,
-                    roomName = roomName,
-                    dead = false,
-                    index = j,
-                    activity = "cp",
-                    keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, arid),
-                    hasMobData = zone.fromDb == true,
-                    lowConfidence = zone.fromMapper == true,
-                    duplicates = total,
-                    dupIndex = j,
+        local resolved = snd.cp.resolveZonesForTarget(target, playerLevel)
+        if type(resolved) ~= "table" or #resolved == 0 then
+            resolved = {
+                {
+                    arid = target.arid or "",
+                    areaName = target.loc or "",
+                    roomName = "",
+                    roomId = nil,
+                    fromDb = false,
+                    fromMapper = true,
                 }
+            }
+            snd.utils.debugNote("CP fallback: unresolved target '" .. tostring(target.mob) .. "', using direct campaign hint")
+        end
+        local visible = {}
+        for _, zone in ipairs(resolved) do
+            local arid = zone.arid or ""
+            local tags = snd.db and snd.db.getMobTags and snd.db.getMobTags(target.mob, arid) or nil
+            if not (tags and tags.nowhere) then
+                zone.tags = tags
+                table.insert(visible, zone)
+            end
+        end
+        if #visible == 0 then
+            table.insert(visible, {
+                arid = target.arid or "",
+                areaName = target.loc or "",
+                roomName = "",
+                roomId = nil,
+                fromDb = false,
+                fromMapper = true,
+            })
+            snd.utils.debugNote("CP fallback: all resolved rows filtered for '" .. tostring(target.mob) .. "', preserving campaign hint row")
+        end
+        local total = #visible
+        for j, zone in ipairs(visible) do
+            local arid = zone.arid or ""
+            local roomName = ""
+            if zone.fromDb and zone.roomName and zone.roomName ~= "" then
+                roomName = zone.roomName
+                emittedAnyRoomTarget = true
+            elseif zone.fromMapper and zone.roomName and zone.roomName ~= "" then
+                roomName = zone.roomName
+                emittedAnyRoomTarget = true
+            elseif snd.campaign.targetType == "room" and not zone.fromDb and target.loc and target.loc ~= "" then
+                roomName = target.loc
+            end
 
-                if zone.tags then
-                    entry.nohunt = zone.tags.nohunt
-                    entry.priority_room = zone.tags.priority_room
-                end
+            local entry = {
+                mob = target.mob,
+                loc = zone.areaName or target.loc or "",
+                arid = arid,
+                roomName = roomName,
+                dead = target.dead == true,
+                index = j,
+                campaignIndex = i,
+                activity = "cp",
+                keyword = target.keyword or snd.gmcp.guessMobKeyword(target.mob, arid),
+                hasMobData = zone.fromDb == true,
+                lowConfidence = zone.fromMapper == true,
+                duplicates = total,
+                dupIndex = j,
+            }
 
-                if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
-                    entry.rmid = tonumber(entry.priority_room)
-                elseif zone.roomId then
-                    entry.rmid = zone.roomId
-                end
+            if zone.tags then
+                entry.nohunt = zone.tags.nohunt
+                entry.priority_room = zone.tags.priority_room
+            end
 
-                if zone.fromMapper then
-                    table.insert(lowEntries, entry)
-                else
-                    table.insert(highEntries, entry)
-                end
+            if entry.priority_room and tonumber(entry.priority_room) and tonumber(entry.priority_room) > 0 then
+                entry.rmid = tonumber(entry.priority_room)
+            elseif zone.roomId then
+                entry.rmid = zone.roomId
+            end
+
+            if zone.fromMapper then
+                table.insert(lowEntries, entry)
+            else
+                table.insert(highEntries, entry)
             end
         end
     end
 
-    local cpDisplayIndex = 0
+    local cpEntries = {}
     for _, entry in ipairs(highEntries) do
-        cpDisplayIndex = cpDisplayIndex + 1
-        entry.displayIndex = cpDisplayIndex
-        table.insert(snd.targets.list, entry)
+        table.insert(cpEntries, entry)
     end
     for _, entry in ipairs(lowEntries) do
-        cpDisplayIndex = cpDisplayIndex + 1
-        entry.displayIndex = cpDisplayIndex
+        table.insert(cpEntries, entry)
+    end
+    table.sort(cpEntries, function(a, b)
+        if a.dead ~= b.dead then
+            return not a.dead
+        end
+        local aLow = a.lowConfidence == true
+        local bLow = b.lowConfidence == true
+        if aLow ~= bLow then
+            return not aLow
+        end
+        if (a.campaignIndex or 0) ~= (b.campaignIndex or 0) then
+            return (a.campaignIndex or 0) < (b.campaignIndex or 0)
+        end
+        return (a.dupIndex or 0) < (b.dupIndex or 0)
+    end)
+
+    local cpDisplayIndex = 0
+    local cpListIndex = 0
+    for _, entry in ipairs(cpEntries) do
+        cpListIndex = cpListIndex + 1
+        entry.cpListIndex = cpListIndex
+        if not entry.dead then
+            cpDisplayIndex = cpDisplayIndex + 1
+            entry.displayIndex = cpDisplayIndex
+        else
+            entry.displayIndex = nil
+        end
         table.insert(snd.targets.list, entry)
     end
 
@@ -869,6 +987,7 @@ function snd.cp.buildMainTargetList()
     end
 
     snd.utils.debugNote("Built main target list: " .. #snd.targets.list .. " CP targets (level " .. playerLevel .. ")")
+    snd.cp.reconcileSelectionAfterRebuild()
 end
 
 --- Update target status from cp check results
@@ -876,7 +995,20 @@ function snd.cp.updateTargetStatus()
     -- Mark all as potentially alive first
     -- Then mark as dead based on check list
     
-    local prunedList = {}
+    local cpCampaignIndex = 0
+    for _, campaignTarget in ipairs(snd.campaign.targets or {}) do
+        cpCampaignIndex = cpCampaignIndex + 1
+        campaignTarget.dead = true
+        for _, check in ipairs(snd.campaign.checkList) do
+            if campaignTarget.mob == check.mob and (campaignTarget.loc or "") == (check.loc or "") then
+                campaignTarget.dead = check.dead
+                break
+            end
+        end
+    end
+
+    local cpList = {}
+    local nonCpList = {}
     local consumedChecks = {}
     for _, target in ipairs(snd.targets.list) do
         if target.activity == "cp" then
@@ -908,21 +1040,46 @@ function snd.cp.updateTargetStatus()
             if not found then
                 target.dead = true
             end
-            if not target.dead then
-                table.insert(prunedList, target)
-            end
+            table.insert(cpList, target)
         else
-            table.insert(prunedList, target)
+            table.insert(nonCpList, target)
         end
     end
-    snd.targets.list = prunedList
+
+    table.sort(cpList, function(a, b)
+        if a.dead ~= b.dead then
+            return not a.dead
+        end
+        local aLow = a.lowConfidence == true
+        local bLow = b.lowConfidence == true
+        if aLow ~= bLow then
+            return not aLow
+        end
+        if (a.campaignIndex or 0) ~= (b.campaignIndex or 0) then
+            return (a.campaignIndex or 0) < (b.campaignIndex or 0)
+        end
+        return (a.dupIndex or 0) < (b.dupIndex or 0)
+    end)
 
     local cpIndex = 0
-    for _, target in ipairs(snd.targets.list) do
-        if target.activity == "cp" and not target.dead then
+    local cpListIndex = 0
+    for _, target in ipairs(cpList) do
+        cpListIndex = cpListIndex + 1
+        target.cpListIndex = cpListIndex
+        if not target.dead then
             cpIndex = cpIndex + 1
             target.displayIndex = cpIndex
+        else
+            target.displayIndex = nil
         end
+    end
+
+    snd.targets.list = {}
+    for _, target in ipairs(nonCpList) do
+        table.insert(snd.targets.list, target)
+    end
+    for _, target in ipairs(cpList) do
+        table.insert(snd.targets.list, target)
     end
 end
 
@@ -1218,6 +1375,7 @@ function snd.cp.selectTarget(index)
     
     local target = nil
     local count = 0
+    local deadTarget = nil
     
     for _, t in ipairs(snd.targets.list) do
         if t.activity == "cp" and not t.dead then
@@ -1227,9 +1385,24 @@ function snd.cp.selectTarget(index)
                 break
             end
         end
+        if t.activity == "cp" and t.dead and tonumber(t.cpListIndex or 0) == index then
+            deadTarget = t
+        end
     end
     
     if not target then
+        if deadTarget then
+            snd.utils.infoNote("Target #" .. tostring(index) .. " is marked dead; requesting fresh cp check.")
+            if snd.cp.requestCheck then
+                snd.cp.requestCheck(0, "cp.selectTarget:dead-index")
+            else
+                send("cp check", false)
+            end
+            if snd.gui and snd.gui.refresh then
+                snd.gui.refresh()
+            end
+            return true
+        end
         snd.utils.infoNote("Invalid target index: " .. index)
         return false
     end

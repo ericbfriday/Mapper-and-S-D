@@ -1065,7 +1065,6 @@ function snd.gui.updateTargetList()
     -- CP / GQ Target Lines
     ---------------------------------------------------------------------------
     if snd.targets and snd.targets.list then
-        local cpDisplayIndex = 0
         local gqDisplayIndex = 0
         local wroteGqHeader = false
 
@@ -1094,7 +1093,7 @@ function snd.gui.updateTargetList()
                 elseif v.dead and (not v.arid or v.arid == "") then
                     color = TC.unknownDead
                 elseif v.dead then
-                    color = TC.dead
+                    color = (v.activity == "cp") and "<tomato>" or TC.dead
                 elseif v.lowConfidence then
                     color = TC.unlikely
                 elseif (not v.arid or v.arid == "") and v.loc and v.loc ~= "" then
@@ -1135,9 +1134,12 @@ function snd.gui.updateTargetList()
                 end
 
                 local displayIndex = nil
-                if v.activity == "cp" and not v.dead then
-                    cpDisplayIndex = cpDisplayIndex + 1
-                    displayIndex = cpDisplayIndex
+                if v.activity == "cp" then
+                    if v.dead then
+                        displayIndex = tonumber(v.cpListIndex) or tonumber(v.displayIndex)
+                    else
+                        displayIndex = tonumber(v.displayIndex) or tonumber(v.cpListIndex)
+                    end
                 elseif v.activity == "gq" and not v.dead then
                     gqDisplayIndex = gqDisplayIndex + 1
                     displayIndex = gqDisplayIndex
@@ -1165,6 +1167,9 @@ function snd.gui.updateTargetList()
                 if displayIndex then
                     local selectCommand = string.format([[snd.commands.selectTarget(%d, "%s")]], displayIndex, v.activity or "cp")
                     local selectHint = string.format("Click to select target #%d (xcp %d)", displayIndex, displayIndex)
+                    if v.activity == "cp" and v.dead then
+                        selectHint = string.format("Click to refresh dead target #%d (runs cp check)", displayIndex)
+                    end
                     local okLink, errL = writeTargetLink(mob .. deathTag, selectCommand, selectHint)
                     if not okLink then
                         snd.utils.debugNote("ERROR echoing line " .. index .. ": " .. tostring(errL))
@@ -1190,13 +1195,28 @@ function snd.gui.updateTargetList()
         if activeTab == "gq" then
             writeTargetText(TC.gray .. "You are not on a global campaign.\n")
         elseif activeTab == "cp" then
+            local cpTargetsInDisplay = 0
+            if snd.targets and snd.targets.list then
+                for _, t in ipairs(snd.targets.list) do
+                    if t.activity == "cp" then
+                        cpTargetsInDisplay = cpTargetsInDisplay + 1
+                    end
+                end
+            end
+            local cpTargetsInCampaign = snd.campaign and snd.campaign.targets and #snd.campaign.targets or 0
+            local hasAnyCpTargets = cpTargetsInDisplay > 0 or cpTargetsInCampaign > 0
+
             writeTargetText(TC.gray .. "No targets\n\n")
-            writeTargetText(TC.gray .. "Use 'campaign request' to populate.\n")
-            local canTakeAnotherCampaign = snd.campaign and snd.campaign.canGetNew
-            if canTakeAnotherCampaign == true then
-                writeTargetText(TC.questAvail .. "\nYou can take another campaign at your level.\n")
-            elseif canTakeAnotherCampaign == false then
-                writeTargetText(TC.gray .. "\nYou will have to level before you can go on another campaign.\n")
+            if hasAnyCpTargets then
+                writeTargetText(TC.gray .. "Campaign data is still syncing. Use 'cp check' to refresh.\n")
+            else
+                writeTargetText(TC.gray .. "Use 'campaign request' to populate.\n")
+                local canTakeAnotherCampaign = snd.campaign and snd.campaign.canGetNew
+                if canTakeAnotherCampaign == true then
+                    writeTargetText(TC.questAvail .. "\nYou can take another campaign at your level.\n")
+                elseif canTakeAnotherCampaign == false then
+                    writeTargetText(TC.gray .. "\nYou will have to level before you can go on another campaign.\n")
+                end
             end
             if snd.cp and snd.cp.normalizeCampaignTodayCounter then
                 snd.cp.normalizeCampaignTodayCounter()

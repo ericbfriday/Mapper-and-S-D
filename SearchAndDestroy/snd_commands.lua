@@ -796,6 +796,10 @@ end
 local function runQuickWhere(args, exact)
     args = snd.utils.trim(args or "")
 
+    local function hasText(value)
+        return snd.utils.trim(tostring(value or "")) ~= ""
+    end
+
     local keyword = args
     local rawKeyword = keyword
     local exactNameHint = ""
@@ -846,9 +850,9 @@ local function runQuickWhere(args, exact)
         if scopedActivity and (not snd.targets.current or snd.targets.current.activity ~= scopedActivity) then
             activateTabTarget(scopedActivity)
         end
-        if snd.targets.current and snd.targets.current.keyword then
+        if snd.targets.current and hasText(snd.targets.current.keyword) then
             keyword = snd.targets.current.keyword
-            if snd.targets.current.name and snd.targets.current.name ~= "" then
+            if hasText(snd.targets.current.name) then
                 exactNameHint = snd.targets.current.name
             end
         elseif snd.quest and snd.quest.active and snd.quest.target and snd.quest.target.keyword and snd.quest.target.keyword ~= "" then
@@ -858,6 +862,12 @@ local function runQuickWhere(args, exact)
             snd.utils.infoNote("No target selected. Usage: qw <keyword>")
             return
         end
+    end
+
+    keyword = snd.utils.trim(keyword or "")
+    if keyword == "" then
+        snd.utils.infoNote("No target keyword available. Usage: qw <keyword>")
+        return
     end
 
     snd.triggers.enableQuickWhereTriggers()
@@ -1102,7 +1112,14 @@ function snd.commands.processQuickWhereResult()
     local quickWhereRooms = {}
     if results and #results > 0 then
         snd.utils.qwDebugNote("QW DEBUG: mapped " .. tostring(#results) .. " room candidates from where result")
-        snd.mapper.searchRoomsResults(results)
+        local quickWhere = snd.nav and snd.nav.quickWhere or nil
+        local reason = string.format(
+            "quickWhereResult(keyword='%s', scope='%s', matches=%d)",
+            tostring((quickWhere and (quickWhere.lookupKeyword or quickWhere.requestedKeyword)) or ""),
+            tostring((quickWhere and quickWhere.scope) or ""),
+            #results
+        )
+        snd.mapper.searchRoomsResults(results, { reason = reason })
         for _, entry in ipairs(results) do
             local roomId = tonumber(entry.rmid) or -1
             if roomId > 0 then
@@ -1206,7 +1223,7 @@ function snd.commands.huntTrickContinue()
 end
 
 function snd.commands.huntTrickComplete()
-    if not snd.nav or not snd.nav.huntTrick then
+    if not snd.nav or not snd.nav.huntTrick or not snd.nav.huntTrick.active then
         return
     end
 
@@ -1228,6 +1245,10 @@ function snd.commands.huntTrickComplete()
 end
 
 function snd.commands.huntTrickFail()
+    if not snd.nav or not snd.nav.huntTrick or not snd.nav.huntTrick.active then
+        return
+    end
+
     local firstTarget = snd.nav and snd.nav.huntTrick and snd.nav.huntTrick.firstTarget
     snd.commands.stopHunt(true)
 
@@ -2323,9 +2344,26 @@ function snd.commands.showTargets()
             cecho("<dim_gray>----------------------------------------<reset>\n")
 
             local index = 0
+            local cpAliveIndex = 0
+            local cpListIndex = 0
+            local gqAliveIndex = 0
             for _, target in ipairs(snd.targets.list) do
                 if target.activity == activity.key then
                     index = index + 1
+                    local selectIndex = index
+
+                    if target.activity == "cp" then
+                        cpListIndex = cpListIndex + 1
+                        if target.dead then
+                            selectIndex = tonumber(target.cpListIndex) or cpListIndex
+                        else
+                            cpAliveIndex = cpAliveIndex + 1
+                            selectIndex = tonumber(target.displayIndex) or cpAliveIndex
+                        end
+                    elseif target.activity == "gq" and not target.dead then
+                        gqAliveIndex = gqAliveIndex + 1
+                        selectIndex = gqAliveIndex
+                    end
 
                     local prefix = ""
                     local prefixColor = "gray"
@@ -2354,7 +2392,7 @@ function snd.commands.showTargets()
                     if not target.dead then
                         -- Clickable index number
                         cecho(rowLead)
-                        cecho(string.format(" <%s>%2d.<reset>", (target.activity == "cp" and isCurrent) and "orange_red" or "yellow", index))
+                        cecho(string.format(" <%s>%2d.<reset>", (target.activity == "cp" and isCurrent) and "orange_red" or "yellow", selectIndex))
                         cecho(string.format("<%s>[%s]<reset> ", prefixColor, prefix))
 
                         -- Clickable mob name
@@ -2370,7 +2408,7 @@ function snd.commands.showTargets()
                         else
                             setUnderline(true)
                             echoLink(target.mob,
-                                [[snd.commands.selectTarget(]] .. index .. [[, "]] .. target.activity .. [[")]],
+                                [[snd.commands.selectTarget(]] .. selectIndex .. [[, "]] .. target.activity .. [[")]],
                                 "Click to select target", true)
                             setUnderline(false)
                         end
@@ -2393,12 +2431,23 @@ function snd.commands.showTargets()
 
                         echo("  ")
                         echoLink("[goto]",
-                            [[snd.commands.selectAndGo(]] .. index .. [[, "]] .. target.activity .. [[")]],
+                            [[snd.commands.selectAndGo(]] .. selectIndex .. [[, "]] .. target.activity .. [[")]],
                             "Select and go to target", true)
                         echo("\n")
                     else
-                        cecho(string.format("%s<dim_gray>%2d. [%s] %s%s<reset>\n",
-                            rowLead, index, prefix, target.mob, " [DEAD]"))
+                        if target.activity == "cp" then
+                            cecho(string.format("%s<tomato>%2d.<reset><%s>[%s]<reset> ",
+                                rowLead, selectIndex, prefixColor, prefix))
+                            setUnderline(true)
+                            echoLink(target.mob,
+                                [[snd.commands.selectTarget(]] .. selectIndex .. [[, "cp")]],
+                                "Dead CP target: click to run cp check", true)
+                            setUnderline(false)
+                            cecho("<tomato> [DEAD]<reset>\n")
+                        else
+                            cecho(string.format("%s<dim_gray>%2d. [%s] %s%s<reset>\n",
+                                rowLead, index, prefix, target.mob, " [DEAD]"))
+                        end
                     end
                 end
             end
