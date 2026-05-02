@@ -93,7 +93,7 @@ This sets snd.db.file and immediately initializes the DB connection.
 
 Default behavior if DB is missing
 
-If configured S&D DB file is not found, S&D prints an error and tells you to copy DB into your Mudlet home dir.
+If configured S&D DB file is not found, S&D creates it automatically with the required schema (v6 core tables: mobs, area, mob_keyword_exceptions, history). No manual copy needed for a fresh start.
 
 **6) Typical first-time setup workflow**
 

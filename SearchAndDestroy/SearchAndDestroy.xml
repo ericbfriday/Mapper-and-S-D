@@ -4,10 +4,14 @@
     <TriggerPackage>
         <!-- Campaign Triggers -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_Campaign">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>cp_info_line</name>
                 <script>snd.triggers.cpInfoLine(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^\s*Find and kill 1 \* (.+)\s*$</string>
@@ -21,6 +25,7 @@
                 <name>cp_check_line</name>
                 <script>snd.triggers.cpCheckLine(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^\s*You still have to kill \* (.+)\s*$</string>
@@ -34,6 +39,7 @@
                 <name>cp_mob_killed</name>
                 <script>snd.triggers.cpMobKilled()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Congratulations, that was one of your CAMPAIGN mobs\!$</string>
@@ -47,6 +53,7 @@
                 <name>cp_complete</name>
                 <script>snd.triggers.cpComplete()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^CONGRATULATIONS\! You have completed your campaign\.$</string>
@@ -60,6 +67,7 @@
                 <name>cp_complete_separator</name>
                 <script>snd.triggers.cpCompleteSeparator()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^-{62}$</string>
@@ -73,6 +81,7 @@
                 <name>cp_quit</name>
                 <script>snd.triggers.cpQuit()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Campaign cleared\.$</string>
@@ -86,6 +95,7 @@
                 <name>cp_can_get_new</name>
                 <script>snd.triggers.cpCanGetNew()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You may take a campaign at this level\.$</string>
@@ -99,6 +109,7 @@
                 <name>cp_not_on</name>
                 <script>snd.triggers.cpNotOn()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You are not currently on a campaign\.$</string>
@@ -112,6 +123,7 @@
                 <name>cp_completed_today</name>
                 <script>snd.triggers.cpCompletedToday(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You have completed (\d+) campaigns? today\.$</string>
@@ -125,6 +137,7 @@
                 <name>cp_time_remaining</name>
                 <script>snd.triggers.cpTimeRemaining(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You have .+ left to finish this campaign\.$</string>
@@ -138,6 +151,7 @@
                 <name>cp_info_footer</name>
                 <script>snd.triggers.cpInfoFooter()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Use 'cp check' to see only targets that you still need to kill\.$</string>
@@ -150,6 +164,7 @@
                 <name>cp_info_complete_by</name>
                 <script>snd.triggers.cpInfoCompleteBy(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Complete By\.{8}: \[\s*(.+?)\s*\]$</string>
@@ -162,6 +177,7 @@
                 <name>cp_info_time_left</name>
                 <script>snd.triggers.cpInfoTimeLeft(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Time Left\s+\.{8}: \[\s*(.+?)\s*\]$</string>
@@ -174,6 +190,7 @@
                 <name>cp_info_reward_qp</name>
                 <script>snd.triggers.cpInfoRewardQP(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Quest Points\.{7}: \[\s+(\d+) \]$</string>
@@ -187,6 +204,7 @@
                 <name>cp_info_reward_tp</name>
                 <script>snd.triggers.cpInfoRewardTP(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Trivia Points\.{6}: \[\s+(\d+) \]$</string>
@@ -200,6 +218,7 @@
                 <name>cp_info_reward_gold</name>
                 <script>snd.triggers.cpInfoRewardGold(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Gold Coins\.{9}: \[\s+([0-9,]+) \]$</string>
@@ -213,6 +232,7 @@
                 <name>cp_info_reward_prac</name>
                 <script>snd.triggers.cpInfoRewardPrac(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Practice Sessions\.{2}: \[\s+(\d+) \]$</string>
@@ -226,6 +246,7 @@
                 <name>cp_info_reward_train</name>
                 <script>snd.triggers.cpInfoRewardTrain(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Training Sessions\.{2}: \[\s+(\d+) \]$</string>
@@ -238,10 +259,14 @@
         
         <!-- Automatic noexp triggers -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_Noexp">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>noexp_manual_off</name>
                 <script>snd.triggers.noexpManualOff()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You will no longer receive experience\. Happy questing\!$</string>
@@ -255,6 +280,7 @@
                 <name>noexp_manual_on</name>
                 <script>snd.triggers.noexpManualOn()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You will now receive experience\. Happy leveling\!$</string>
@@ -268,6 +294,7 @@
                 <name>noexp_xp_gain</name>
                 <script>snd.triggers.noexpXpGain()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You (?:don't )?receive (\d+)(?:\+\d+)? experience points?\.$</string>
@@ -281,6 +308,7 @@
                 <name>noexp_must_level</name>
                 <script>snd.triggers.noexpMustLevelBeforeCampaign()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You will have to level before you can go on another campaign\.$</string>
@@ -293,10 +321,14 @@
 
         <!-- Global Quest Triggers -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_GQuest">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>gq_joined</name>
                 <script>snd.triggers.gqJoined(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You have now joined Global Quest # (\d+)\. See 'help gquest' for available commands\.$</string>
@@ -310,6 +342,7 @@
                 <name>gq_started</name>
                 <script>snd.triggers.gqStarted(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Global Quest: Global quest # (\d+) for levels (\d+) to (\d+)(?: - .*)? has now started\.$</string>
@@ -323,6 +356,7 @@
                 <name>gq_info_line</name>
                 <script>snd.triggers.gqInfoLine(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Kill at least (\d+) \* (.+)\.$</string>
@@ -336,6 +370,7 @@
                 <name>gq_quest_name</name>
                 <script>snd.triggers.gqQuestName(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Quest Name\.{9}: \[\s*Global quest # (\d+)\s*\]$</string>
@@ -349,6 +384,7 @@
                 <name>gq_level_range</name>
                 <script>snd.triggers.gqLevelRange(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Level range\.{8}: \[\s*(\d+)\s*\] - \[\s*(\d+)\s*\]$</string>
@@ -362,6 +398,7 @@
                 <name>gq_info_reward_qp</name>
                 <script>snd.triggers.gqInfoRewardQP(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Quest points\.{7}: \[\s*([0-9,]+)\s*\](?:\s*\(\s*\+([0-9,]+)\s+for each mob killed\s*\))?$</string>
@@ -375,6 +412,7 @@
                 <name>gq_info_reward_tp</name>
                 <script>snd.triggers.gqInfoRewardTP(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Trivia points\.{6}: \[\s*([0-9,]+)\s*\]$</string>
@@ -388,6 +426,7 @@
                 <name>gq_info_reward_prac</name>
                 <script>snd.triggers.gqInfoRewardPrac(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Practice Sessions\.{2}: \[\s*([0-9,]+)\s*\]$</string>
@@ -401,6 +440,7 @@
                 <name>gq_info_reward_gold</name>
                 <script>snd.triggers.gqInfoRewardGold(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Gold Coins\.{9}: \[\s*([0-9,]+)\s*\]$</string>
@@ -414,6 +454,7 @@
                 <name>gq_check_line</name>
                 <script>snd.triggers.gqCheckLine(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You still have to kill (\d+) \* (.+)$</string>
@@ -427,6 +468,7 @@
                 <name>gq_mob_killed</name>
                 <script>snd.triggers.gqMobKilled()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^[Cc][Oo][Nn][Gg][Rr][Aa][Tt][Uu][Ll][Aa][Tt][Ii][Oo][Nn][Ss], that was one of the GLOBAL QUEST mobs\!$</string>
@@ -440,6 +482,7 @@
                 <name>gq_kill_bonus_qp</name>
                 <script>snd.triggers.gqKillBonus(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^([0-9,]+) quest points awarded\.$</string>
@@ -453,6 +496,7 @@
                 <name>gq_reward_qp_added</name>
                 <script>snd.triggers.gqCompletionRewardQp(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Reward of ([0-9,]+) quest points? added\.$</string>
@@ -466,6 +510,7 @@
                 <name>gq_reward_tp_added</name>
                 <script>snd.triggers.gqCompletionRewardTp(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Reward of ([0-9,]+) trivia points? added\.$</string>
@@ -479,6 +524,7 @@
                 <name>gq_reward_prac_added</name>
                 <script>snd.triggers.gqCompletionRewardPrac(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Reward of ([0-9,]+) practice sessions? added\.$</string>
@@ -492,6 +538,7 @@
                 <name>gq_reward_gold_added</name>
                 <script>snd.triggers.gqCompletionRewardGold(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Reward of ([0-9,]+) gold coins? added\.$</string>
@@ -505,6 +552,7 @@
                 <name>gq_winner</name>
                 <script>snd.triggers.gqWinner(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Global Quest: Global Quest # (\d+) has been won by ([A-Z][A-Za-z]+) - \d*(?:1st|2nd|3rd|\dth) win\.$</string>
@@ -518,6 +566,7 @@
                 <name>gq_ended</name>
                 <script>snd.triggers.gqEnded(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Global Quest: Global quest # (\d+)(?: \(extended\))? is now over\.$</string>
@@ -531,6 +580,7 @@
                 <name>gq_not_on</name>
                 <script>snd.triggers.gqNotOn()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You are not in a global quest\.$</string>
@@ -543,10 +593,14 @@
         
         <!-- Quest Triggers -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_Quest">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>quest_reward_line</name>
                 <script>snd.triggers.questRewardLine(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^.+ tells you 'As a reward, I am giving you (\d+) quest points and (\d+) gold\.'$</string>
@@ -559,6 +613,7 @@
                 <name>quest_blessing_bonus</name>
                 <script>snd.triggers.questBlessing(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You receive (\d+) bonus quest points from your daily blessing\.$</string>
@@ -571,6 +626,7 @@
                 <name>quest_extra_qp</name>
                 <script>snd.triggers.questExtraQp(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You get lucky and gain an extra (\d+) quest points\.$</string>
@@ -583,10 +639,14 @@
         
         <!-- Quick Where Triggers -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_QuickWhere">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="no" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>qw_match</name>
                 <script>snd.triggers.qwMatch(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^(.{30}) ([^ (0-9].*)$</string>
@@ -600,6 +660,7 @@
                 <name>qw_no_match</name>
                 <script>snd.triggers.qwNoMatch()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^There is no \w.+ around here\.$</string>
@@ -612,10 +673,14 @@
         
         <!-- Hunt Triggers -->
         <TriggerGroup isActive="no" isFolder="yes" name="SND_Hunt">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>hunt_direction</name>
                 <script>snd.triggers.huntDirection(matches)</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You are (?:almost )?certain that .+ is (north|south|east|west|up|down) from here\.$</string>
@@ -629,6 +694,7 @@
                 <name>hunt_here</name>
                 <script>snd.triggers.huntHere()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^.+ is here\!$</string>
@@ -642,6 +708,7 @@
                 <name>hunt_complete</name>
                 <script>snd.triggers.huntComplete()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^You seem unable to hunt that target for some reason\.$</string>
@@ -655,6 +722,7 @@
                 <name>hunt_fail</name>
                 <script>snd.triggers.huntFail()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^No one in this area by the name '.+'\.$|^You couldn\'t find a path to .+ from here\.$|^No one in this area by that name\.$</string>
@@ -668,6 +736,7 @@
                 <name>hunt_abort</name>
                 <script>snd.triggers.huntAbort()</script>
                 <mCommand></mCommand>
+                <triggerType>0</triggerType>
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Not while you are fighting\!|^You can\'t hunt while (?:resting|sitting)\.$|^You dream about going on a nice hunting trip, with pony rides, and campfires too\.$</string>
@@ -680,11 +749,16 @@
         
         <!-- Dinv Output Gags -->
         <TriggerGroup isActive="yes" isFolder="yes" name="SND_Dinv">
+            <packageName></packageName>
+            <script></script>
+            <triggerType>0</triggerType>
         </TriggerGroup>
     </TriggerPackage>
     
     <AliasPackage>
         <AliasGroup isActive="yes" isFolder="yes" name="SND_Commands">
+            <packageName></packageName>
+            <script></script>
             <!-- sndreload - manual reload -->
             <Alias isActive="yes" name="sndreload">
                 <script><![CDATA[

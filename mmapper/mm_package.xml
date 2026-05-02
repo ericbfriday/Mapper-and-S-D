@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE MudletPackage>
 <MudletPackage version="1.0">
+  <ScriptPackage>
   <ScriptGroup isActive="yes" isFolder="yes" name="mmapper">
-    <Script isActive="yes" isFolder="no" name="mm_core"><![CDATA[
+    <packageName></packageName>
+    <script></script>
+    <eventHandlerList/>
+    <Script isActive="yes" isFolder="no" name="mm_core"><packageName></packageName><eventHandlerList/><![CDATA[
 mm = mm or {}
 
 mm.state = mm.state or {
@@ -182,7 +187,7 @@ function mm.print_room_details(room)
 end
 
     ]]></Script>
-    <Script isActive="yes" isFolder="no" name="mm_help"><![CDATA[
+    <Script isActive="yes" isFolder="no" name="mm_help"><packageName></packageName><eventHandlerList/><![CDATA[
 mm = mm or {}
 
 mm.help_header = "                              [GMCP Mapper Help]"
@@ -412,7 +417,7 @@ function mm.minimap.hide_all()
 end
 
     ]]></Script>
-    <Script isActive="yes" isFolder="no" name="mm_commands"><![CDATA[
+    <Script isActive="yes" isFolder="no" name="mm_commands"><packageName></packageName><eventHandlerList/><![CDATA[
 mm = mm or {}
 
 local function handle_window_command(which, action, a, b)
@@ -526,7 +531,7 @@ function mm.register_aliases()
 end
 
     ]]></Script>
-    <Script isActive="yes" isFolder="no" name="mm_import"><![CDATA[
+    <Script isActive="yes" isFolder="no" name="mm_import"><packageName></packageName><eventHandlerList/><![CDATA[
 mm = mm or {}
 mm.import = mm.import or {}
 
@@ -815,7 +820,7 @@ function mm.import.convert_sqlite_to_mudlet(source_path, target_path)
 end
 
     ]]></Script>
-    <Script isActive="yes" isFolder="no" name="mm_gmcp"><![CDATA[
+    <Script isActive="yes" isFolder="no" name="mm_gmcp"><packageName></packageName><eventHandlerList/><![CDATA[
 mm = mm or {}
 
 local function sync_current_room(info)
@@ -878,7 +883,7 @@ function mm.register_events()
 end
 
     ]]></Script>
-    <Script isActive="yes" isFolder="no" name="mm_startup"><![CDATA[
+    <Script isActive="yes" isFolder="no" name="mm_startup"><packageName></packageName><eventHandlerList/><![CDATA[
 
 if mm and type(mm.register_aliases)=="function" and type(mm.register_events)=="function" and mm.minimap and type(mm.minimap.init)=="function" then
   mm.register_aliases()
@@ -898,4 +903,5 @@ end
 
     ]]></Script>
   </ScriptGroup>
+  </ScriptPackage>
 </MudletPackage>

@@ -44,39 +44,111 @@ snd.db.file = getMudletHomeDir() .. "/SnDdb.db"
 -- Database Connection
 -------------------------------------------------------------------------------
 
---- Open database connection
+--- Open database connection.
+-- If the database file does not exist, creates it with the full v6 schema
+-- so that a fresh install can function without a pre-existing .db file.
 function snd.db.open()
     if snd.db.isOpen then
         return true
     end
-    
-    -- Check if file exists
+
+    local isNewDb = false
     local f = io.open(snd.db.file, "r")
-    if not f then
-        snd.utils.errorNote("Database file not found: " .. snd.db.file)
-        snd.utils.infoNote("Please copy your snd.db file to: " .. getMudletHomeDir())
-        return false
+    if f then
+        f:close()
+    else
+        isNewDb = true
     end
-    f:close()
-    
+
     -- Create environment
     snd.db.env = luasql.sqlite3()
     if not snd.db.env then
         snd.utils.errorNote("Failed to create LuaSQL environment")
         return false
     end
-    
-    -- Open connection
+
+    -- Open (or create) connection — LuaSQL sqlite3 creates the file if absent
     local err
     snd.db.conn, err = snd.db.env:connect(snd.db.file)
     if not snd.db.conn then
         snd.utils.errorNote("Failed to open database: " .. tostring(err))
         return false
     end
-    
+
     snd.db.isOpen = true
-    snd.utils.debugNote("Database opened: " .. snd.db.file)
+
+    if isNewDb then
+        snd.utils.infoNote("Creating new S&D database: " .. snd.db.file)
+        snd.db.createCoreSchema()
+    else
+        snd.utils.debugNote("Database opened: " .. snd.db.file)
+    end
+
     return true
+end
+
+--- Create the core v6 schema tables when a fresh database is initialised.
+-- Every statement uses CREATE TABLE IF NOT EXISTS so it is safe to call on
+-- an existing database that may have been partially set up.
+function snd.db.createCoreSchema()
+    -- mobs: mob sighting and kill tracking per room
+    snd.db.execute([[
+        CREATE TABLE IF NOT EXISTS mobs (
+            mob       TEXT    NOT NULL,
+            room      TEXT    NOT NULL DEFAULT '',
+            roomid    INTEGER NOT NULL DEFAULT 0,
+            zone      TEXT    NOT NULL DEFAULT '',
+            seen_count INTEGER NOT NULL DEFAULT 0,
+            kill_count INTEGER NOT NULL DEFAULT 0
+        )
+    ]])
+    snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mobs_mob_roomid ON mobs (mob, roomid)")
+    snd.db.execute("CREATE INDEX IF NOT EXISTS idx_mobs_zone ON mobs (zone)")
+
+    -- area: area metadata and start rooms
+    snd.db.execute([[
+        CREATE TABLE IF NOT EXISTS area (
+            name      TEXT    NOT NULL DEFAULT '',
+            key       TEXT    NOT NULL DEFAULT '',
+            minlvl    INTEGER NOT NULL DEFAULT 0,
+            maxlvl    INTEGER NOT NULL DEFAULT 0,
+            lock      INTEGER NOT NULL DEFAULT 0,
+            startRoom INTEGER NOT NULL DEFAULT -1,
+            noquest   TEXT    NOT NULL DEFAULT '',
+            vidblain  TEXT    NOT NULL DEFAULT '',
+            userKey   TEXT    NOT NULL DEFAULT ''
+        )
+    ]])
+    snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_area_key ON area (key)")
+
+    -- mob_keyword_exceptions: user-defined mob keywords
+    snd.db.execute([[
+        CREATE TABLE IF NOT EXISTS mob_keyword_exceptions (
+            area_name TEXT NOT NULL,
+            mob_name  TEXT NOT NULL,
+            keyword   TEXT NOT NULL
+        )
+    ]])
+    snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mke_area_mob ON mob_keyword_exceptions (area_name, mob_name)")
+
+    -- history: quest / gquest / campaign completion tracking (schema v6)
+    snd.db.execute([[
+        CREATE TABLE IF NOT EXISTS history (
+            id             INTEGER PRIMARY KEY,
+            type           INTEGER NOT NULL DEFAULT 0,
+            status         INTEGER NOT NULL DEFAULT 0,
+            level_taken    INTEGER NOT NULL DEFAULT 0,
+            start_time     INTEGER NOT NULL DEFAULT 0,
+            end_time       INTEGER NOT NULL DEFAULT 0,
+            qp_rewards     INTEGER NOT NULL DEFAULT 0,
+            tp_rewards     INTEGER NOT NULL DEFAULT 0,
+            train_rewards  INTEGER NOT NULL DEFAULT 0,
+            prac_rewards   INTEGER NOT NULL DEFAULT 0,
+            gold_rewards   INTEGER NOT NULL DEFAULT 0
+        )
+    ]])
+
+    snd.utils.infoNote("S&D database schema created successfully.")
 end
 
 --- Close database connection
@@ -178,19 +250,78 @@ function snd.db.ensureMobTagsTable()
     return true
 end
 
+--- Ensure the Aardwolf mapper database exists at the expected path.
+-- The mapper DB stores room/exit data used for S&D navigation.  If the file
+-- is missing a new empty database with the required schema is created so that
+-- the mapper and S&D can populate it from GMCP data or a later SQLite import.
+function snd.db.ensureAardwolfDb()
+    local mapDbName = (mm and mm.state and mm.state.map_db) or "Aardwolf.db"
+    local mapDbPath = getMudletHomeDir() .. "/" .. mapDbName
+
+    local f = io.open(mapDbPath, "r")
+    if f then
+        f:close()
+        return true
+    end
+
+    local env = luasql.sqlite3()
+    if not env then
+        snd.utils.errorNote("Failed to create LuaSQL env for mapper DB")
+        return false
+    end
+
+    local conn, err = env:connect(mapDbPath)
+    if not conn then
+        env:close()
+        snd.utils.errorNote("Failed to create mapper DB: " .. tostring(err))
+        return false
+    end
+
+    conn:execute([[
+        CREATE TABLE IF NOT EXISTS rooms (
+            uid      INTEGER PRIMARY KEY,
+            name     TEXT    NOT NULL DEFAULT '',
+            area     TEXT    NOT NULL DEFAULT '',
+            x        INTEGER NOT NULL DEFAULT 0,
+            y        INTEGER NOT NULL DEFAULT 0,
+            z        INTEGER NOT NULL DEFAULT 0,
+            norecall INTEGER NOT NULL DEFAULT 0,
+            noportal INTEGER NOT NULL DEFAULT 0
+        )
+    ]])
+    conn:execute("CREATE INDEX IF NOT EXISTS idx_rooms_area ON rooms (area)")
+
+    conn:execute([[
+        CREATE TABLE IF NOT EXISTS exits (
+            fromuid INTEGER NOT NULL,
+            touid   INTEGER NOT NULL,
+            dir     TEXT    NOT NULL DEFAULT ''
+        )
+    ]])
+    conn:execute("CREATE INDEX IF NOT EXISTS idx_exits_from ON exits (fromuid)")
+    conn:execute("CREATE INDEX IF NOT EXISTS idx_exits_to   ON exits (touid)")
+
+    conn:close()
+    env:close()
+
+    snd.utils.infoNote("Created empty mapper database: " .. mapDbPath)
+    return true
+end
+
 --- Initialize the database
 function snd.db.initialize(silent)
     if not silent then
         snd.utils.debugNote("Initializing database...")
     end
-    
+
+    snd.db.ensureAardwolfDb()
+
     if not snd.db.open() then
         return false
     end
     snd.db.clearSeenCache()
     snd.db.clearKillCache()
-    
-    -- Verify tables exist
+
     local tables = snd.db.getTables()
     if not silent then
         snd.utils.debugNote("Found tables: " .. table.concat(tables, ", "))
@@ -200,14 +331,13 @@ function snd.db.initialize(silent)
     snd.db.ensureMobTagsTable()
     snd.db.normalizeMobTagRows()
     snd.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mob_tags_key_nocase ON mob_tags(lower(mob), lower(zone))")
-    
-    -- Get stats
+
     local stats = snd.db.getStats()
     if not silent then
         snd.utils.infoNote(string.format("Database loaded: %d mobs, %d areas, %d keywords",
             stats.mobs, stats.areas, stats.keywords))
     end
-    
+
     return true
 end
 
@@ -1366,26 +1496,3 @@ registerAnonymousEventHandler("sysExitEvent", function()
 end)
 
 -- Module loaded silently
-    local tables = snd.db.getTables()
-    local hasHistory = false
-    for _, t in ipairs(tables) do
-        if t == "history" then
-            hasHistory = true
-            break
-        end
-    end
-    if not hasHistory then
-        return {}
-    end
-
-    local tables = snd.db.getTables()
-    local hasHistory = false
-    for _, t in ipairs(tables) do
-        if t == "history" then
-            hasHistory = true
-            break
-        end
-    end
-    if not hasHistory then
-        return nil
-    end
