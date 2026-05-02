@@ -95,6 +95,15 @@ function mm.initialize()
     mm.warn("Native mapper DB was not auto-loaded: " .. tostring(err))
   end
 
+  safe_step("ensure_exits_chaos_column", function()
+    if mm.ensure_exits_chaos_column then
+      local ok, ensure_err = mm.ensure_exits_chaos_column()
+      if not ok then
+        mm.warn("Could not ensure exits.chaos column: " .. tostring(ensure_err))
+      end
+    end
+  end)
+
   safe_step("load_portal_persistence", function()
     if mm.load_portal_persistence and mm.load_portal_persistence() then
       mm.note("Loaded rebuilt portals from local state file.")

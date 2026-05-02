@@ -524,6 +524,71 @@ function snd.utils.isDefaultReportChannel(channel)
     return channel == "" or channel == "default" or channel == "echo"
 end
 
+
+--- True when configured report channel is a direct MUD channel command.
+-- Non-MUD channels are treated as local aliases/macros and sent via expandAlias.
+-- @param channel string configured report channel command
+-- @return boolean
+function snd.utils.isMudReportChannel(channel)
+    local raw = snd.utils.trim(channel or "")
+    if raw == "" then return false end
+
+    local cmd = raw:match("^(%S+)") or ""
+    cmd = cmd:lower()
+
+    local mudChannels = {
+        say = true,
+        tell = true,
+        reply = true,
+        gtell = true,
+        group = true,
+        clan = true,
+        ct = true,
+        gt = true,
+        auction = true,
+        newbie = true,
+        notify = true,
+        gossip = true,
+        chat = true,
+        atalk = true,
+        ytell = true,
+        yell = true,
+        shout = true,
+    }
+
+    return mudChannels[cmd] == true
+end
+
+--- Dispatch report payload through configured channel.
+-- Mud channels go directly to game; virtual/custom channels go through expandAlias.
+-- @param channel string configured report channel command
+-- @param payload string report text payload
+-- @return boolean true when dispatch function ran without error
+function snd.utils.dispatchReportChannel(channel, payload)
+    channel = snd.utils.trim(channel or "")
+    payload = snd.utils.trim(payload or "")
+    if channel == "" or payload == "" then
+        return false
+    end
+
+    local cmd = channel .. " " .. payload
+
+    if not snd.utils.isMudReportChannel(channel) and type(expandAlias) == "function" then
+        return pcall(expandAlias, cmd, false)
+    end
+
+    if snd.commands and snd.commands.sendGameCommand then
+        return snd.commands.sendGameCommand(cmd, false)
+    end
+
+    if type(send) == "function" then
+        local ok = pcall(send, cmd, false)
+        return ok
+    end
+
+    return false
+end
+
 --- Route a formatted report line to default echo or configured channel
 -- @param text string Text to report
 -- @param eventType string semantic type for color coding
@@ -545,13 +610,8 @@ function snd.utils.reportLine(text, eventType)
         return true
     end
 
-    local payload = string.format("%s[%s]@x %s", snd.utils.getReportAardColor(eventType), style.label, text)
-    if snd.commands and snd.commands.sendGameCommand then
-        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
-    end
-
-    send(channel .. " " .. payload, false)
-    return true
+    local payload = string.format("%s[%s]@w %s", snd.utils.getReportAardColor(eventType), style.label, text)
+    return snd.utils.dispatchReportChannel(channel, payload)
 end
 
 --- Format quest duration for completion output as H/M/S with minutes included.
@@ -606,15 +666,10 @@ function snd.utils.reportQuestCompletion(qp, gold, durationSeconds)
 
     local channelDurationSuffix = ""
     if durationText ~= "" then
-        channelDurationSuffix = string.format(", @cDuration: %s@x", durationText)
+        channelDurationSuffix = string.format(", @cDuration: %s@w", durationText)
     end
-    local payload = string.format("@MQuest complete!@x @rQP: %d@x, @yGold: %d@x%s", qp, gold, channelDurationSuffix)
-    if snd.commands and snd.commands.sendGameCommand then
-        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
-    end
-
-    send(channel .. " " .. payload, false)
-    return true
+    local payload = string.format("@MQuest complete!@w @rQP: %d@w, @yGold: %d@w%s", qp, gold, channelDurationSuffix)
+    return snd.utils.dispatchReportChannel(channel, payload)
 end
 
 --- Report campaign completion with rewards and duration from history.
@@ -646,28 +701,36 @@ function snd.utils.reportCampaignCompletion(rewards, durationSeconds)
     end
 
     if snd.utils.isDefaultReportChannel(channel) then
-        cecho(string.format(
-            "<orange>[S&D]<reset> <green>Campaign complete!<reset> %s\n",
+        local message = string.format(
+            "\n<orange>[S&D]<reset> <green>Campaign complete!<reset> %s\n",
             rewardText
-        ))
+        )
+        if type(tempTimer) == "function" then
+            tempTimer(0.5, function()
+                cecho(message)
+            end)
+        else
+            cecho(message)
+        end
         return true
     end
 
     local channelParts = {
-        string.format("@rQP: %d@x", qp),
-        string.format("@yGold: %d@x", gold),
+        string.format("@rQP: %d@w", qp),
+        string.format("@yGold: %d@w", gold),
     }
-    if tp > 0 then table.insert(channelParts, string.format("@wTP: %d@x", tp)) end
-    if trains > 0 then table.insert(channelParts, string.format("@cTrains: %d@x", trains)) end
-    if pracs > 0 then table.insert(channelParts, string.format("@gPracs: %d@x", pracs)) end
-    if durationText ~= "" then table.insert(channelParts, string.format("@cDuration: %s@x", durationText)) end
-    local payload = string.format("@GCampaign complete!@x %s", table.concat(channelParts, ", "))
-    if snd.commands and snd.commands.sendGameCommand then
-        return snd.commands.sendGameCommand(channel .. " " .. payload, false)
+    if tp > 0 then table.insert(channelParts, string.format("@wTP: %d@w", tp)) end
+    if trains > 0 then table.insert(channelParts, string.format("@cTrains: %d@w", trains)) end
+    if pracs > 0 then table.insert(channelParts, string.format("@gPracs: %d@w", pracs)) end
+    if durationText ~= "" then table.insert(channelParts, string.format("@cDuration: %s@w", durationText)) end
+    local payload = string.format("@GCampaign complete!@w %s", table.concat(channelParts, ", "))
+    if type(tempTimer) == "function" then
+        tempTimer(0.2, function()
+            snd.utils.dispatchReportChannel(channel, payload)
+        end)
+        return true
     end
-
-    send(channel .. " " .. payload, false)
-    return true
+    return snd.utils.dispatchReportChannel(channel, payload)
 end
 
 -------------------------------------------------------------------------------

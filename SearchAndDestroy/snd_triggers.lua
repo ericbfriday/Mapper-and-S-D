@@ -209,6 +209,8 @@ end
 
 --- Auto-noexp must level trigger
 function snd.triggers.noexpMustLevelBeforeCampaign()
+    snd.campaign.canGetNew = false
+
     if snd.gmcp and snd.gmcp.setCampaignEligibility then
         snd.gmcp.setCampaignEligibility(false)
     elseif snd.char and snd.char.noexp then
@@ -217,6 +219,9 @@ function snd.triggers.noexpMustLevelBeforeCampaign()
     end
     if snd.gui and snd.gui.updateNoexp then
         snd.gui.updateNoexp()
+    end
+    if snd.gui and snd.gui.refresh then
+        snd.gui.refresh()
     end
 end
 
@@ -290,6 +295,12 @@ function snd.triggers.gqInfoRewardTP(matches)
     scheduleGqInfoEnd()
 end
 
+function snd.triggers.gqInfoRewardTrain(matches)
+    if not matches or not matches[2] then return end
+    snd.gq.captureInfoReward("trains", matches[2])
+    scheduleGqInfoEnd()
+end
+
 function snd.triggers.gqInfoRewardPrac(matches)
     if not matches or not matches[2] then return end
     snd.gq.captureInfoReward("pracs", matches[2])
@@ -323,6 +334,11 @@ end
 function snd.triggers.gqCompletionRewardTp(matches)
     if not matches or not matches[2] then return end
     snd.gq.captureInfoReward("tp", matches[2])
+end
+
+function snd.triggers.gqCompletionRewardTrain(matches)
+    if not matches or not matches[2] then return end
+    snd.gq.captureInfoReward("trains", matches[2])
 end
 
 function snd.triggers.gqCompletionRewardPrac(matches)
@@ -372,6 +388,13 @@ end
 function snd.triggers.gqEnded(matches)
     if not matches or not matches[2] then return end
     snd.gq.onEnded(matches[2])
+end
+
+--- GQ quit trigger
+-- Matches: "You are no longer part of Global Quest # 123 and will be unable to rejoin."
+function snd.triggers.gqQuit(matches)
+    if not matches or not matches[2] then return end
+    snd.gq.onQuit(matches[2])
 end
 
 --- Not on GQ trigger

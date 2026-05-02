@@ -141,7 +141,7 @@ function snd.gq.endGqInfo()
 end
 
 --- Capture one of the global quest reward fields from gq info output.
--- @param rewardType string one of: qp, tp, pracs, gold
+-- @param rewardType string one of: qp, tp, trains, pracs, gold
 -- @param value string|number reward value from regex capture
 -- @param bonusPerKill string|number|nil optional qp bonus awarded per target kill
 function snd.gq.captureInfoReward(rewardType, value, bonusPerKill)
@@ -155,6 +155,8 @@ function snd.gq.captureInfoReward(rewardType, value, bonusPerKill)
         snd.gquest.qpPerKillBonus = tonumber(bonusPerKill) or snd.gquest.qpPerKillBonus or 0
     elseif rewardType == "tp" then
         snd.gquest.tpReward = amount
+    elseif rewardType == "trains" then
+        snd.gquest.trainReward = amount
     elseif rewardType == "pracs" then
         snd.gquest.pracReward = amount
     elseif rewardType == "gold" then
@@ -511,6 +513,19 @@ function snd.gq.onEnded(gqId)
     end
 end
 
+--- Handle gquest quit message
+-- @param gqId The global quest ID
+function snd.gq.onQuit(gqId)
+    snd.utils.reportLine("Left Global Quest #" .. gqId, "gquest")
+
+    if snd.gquest.joined == gqId or snd.gquest.started == gqId then
+        if snd.db then
+            snd.db.historyEnd(snd.db.HISTORY_TYPE_GQUEST, snd.db.HISTORY_STATUS_FAILED)
+        end
+        snd.gq.clearGquest()
+    end
+end
+
 --- Handle not on gquest message
 function snd.gq.onNotOnGquest()
     snd.utils.debugNote("Not on global quest")
@@ -549,7 +564,7 @@ function snd.gq.clearGquest()
     if snd.targets.current and snd.targets.current.activity == "gq" then
         snd.clearTarget()
     end
-    
+
     -- Update activity type
     if snd.campaign.active then
         snd.targets.activity = "cp"
@@ -557,7 +572,11 @@ function snd.gq.clearGquest()
         snd.targets.activity = "none"
         snd.targets.type = "none"
     end
-    
+
+    if snd.nav and snd.nav.clearActivityQuickWhere then
+        snd.nav.clearActivityQuickWhere("gq")
+    end
+
     if snd.gui and snd.gui.refresh then
         snd.gui.refresh()
     end

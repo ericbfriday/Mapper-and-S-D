@@ -216,6 +216,20 @@ local function handle_command_inline(line)
     end
     local normalized = tostring(command):lower():gsub("^%s+", ""):gsub("%s+$", "")
     local is_recall = (normalized == "recall" or normalized == "home" or normalized == "return home")
+    local existing, check_err = mm.query_mapper_db(string.format(
+      "SELECT COUNT(*) AS cnt FROM exits WHERE fromuid in ('*','**') AND dir = %s",
+      mm.sql_escape(command)
+    ))
+    if not existing then
+      mm.warn("Failed checking existing portal command: " .. tostring(check_err))
+      return true
+    end
+    if (tonumber(existing[1] and existing[1].cnt) or 0) > 0 then
+      mm.warn("A mapper portal with that command already exists.")
+      mm.warn("Use 'mapper rebuildportals' to rebuild/update portal definitions.")
+      mm.warn("Also see 'mapper help portals' for command usage.")
+      return true
+    end
     if is_recall then
       nav.addRecallPortal(command, level)
     else
@@ -366,6 +380,26 @@ local function handle_command_inline(line)
   end
   if line == "mapper portalrecall" then
     mm.warn("Usage: mapper portalrecall <index>")
+    return true
+  end
+
+  local chaosportal_idx = line:match("^mapper chaosportal%s+(%d+)$")
+  if chaosportal_idx then
+    local ok, err
+    if mm.set_portal_chaos then
+      ok, err = mm.set_portal_chaos(tonumber(chaosportal_idx))
+    else
+      ok, err = false, "mapper chaosportal is unavailable"
+    end
+    if not ok then
+      mm.warn(err)
+    else
+      mm.note("Toggled chaos flag for portal #" .. tostring(chaosportal_idx))
+    end
+    return true
+  end
+  if line == "mapper chaosportal" then
+    mm.warn("Usage: mapper chaosportal <index>")
     return true
   end
 
@@ -771,6 +805,50 @@ mm.alias_specs = {
   {"^mapper stop$", function() send("stop") end},
   {"^mapper thisroom$", function() mm.print_room_details() end},
   {"^mapper showroom (.+)$", function(m) mm.print_room_details(m[2]) end},
+  {"^mapper saferoom$", function()
+      local rid = snd and snd.room and snd.room.current and snd.room.current.rmid
+      if not rid or rid == "-1" then mm.warn("Current room unknown.") return end
+      if snd.mapper and snd.mapper.markRoomSafe and snd.mapper.markRoomSafe(rid, true) then
+        mm.note("Room " .. tostring(rid) .. " saferoom = on")
+      else
+        mm.warn("Failed to update safe flag.")
+      end
+    end},
+  {"^mapper saferoom (%w+)$", function(m)
+      local arg = tostring(m[2] or ""):lower()
+      local rid = snd and snd.room and snd.room.current and snd.room.current.rmid
+      local value
+      local targetId
+      if arg == "on" or arg == "off" then
+        if not rid or rid == "-1" then mm.warn("Current room unknown.") return end
+        targetId = rid
+        value = (arg == "on")
+      elseif tonumber(arg) then
+        targetId = arg
+        value = true
+      else
+        mm.warn("Usage: mapper saferoom [on|off|<roomId>]")
+        return
+      end
+      if snd.mapper and snd.mapper.markRoomSafe and snd.mapper.markRoomSafe(targetId, value) then
+        mm.note("Room " .. tostring(targetId) .. " saferoom = " .. (value and "on" or "off"))
+      else
+        mm.warn("Failed to update safe flag.")
+      end
+    end},
+  {"^mapper saferoom (%d+) (%w+)$", function(m)
+      local rid = m[2]
+      local arg = tostring(m[3] or ""):lower()
+      local value
+      if arg == "on" then value = true
+      elseif arg == "off" then value = false
+      else mm.warn("Usage: mapper saferoom <roomId> [on|off]") return end
+      if snd.mapper and snd.mapper.markRoomSafe and snd.mapper.markRoomSafe(rid, value) then
+        mm.note("Room " .. tostring(rid) .. " saferoom = " .. (value and "on" or "off"))
+      else
+        mm.warn("Failed to update safe flag.")
+      end
+    end},
   {"^mapper quicklist(?: (on|off))?$", function(m) mm.state.quick_mode = mm.bool_arg(m[2], not mm.state.quick_mode); mm.note("quicklist " .. (mm.state.quick_mode and "on" or "off")) end},
   {"^mapper shownotes(?: (on|off))?$", function(m) if m[2] then mm.state.shownotes = mm.bool_arg(m[2], mm.state.shownotes) end; mm.note("shownotes " .. (mm.state.shownotes and "on" or "off")) end},
   {"^mapper compact(?: (on|off))?$", function(m) mm.state.compact_mode = mm.bool_arg(m[2], not mm.state.compact_mode); mm.note("compact " .. (mm.state.compact_mode and "on" or "off")) end},
@@ -811,6 +889,7 @@ mm.alias_specs = {
   {"^mapper rebuildportals$", function() local ok, err = mm.rebuild_portals_from_db(); if not ok then mm.warn(err) end end},
   {"^mapper portals$", function() local ok, err = mm.print_portals(); if not ok and err then mm.warn(err) end end},
   {"^mapper portalrecall%s+(%d+)$", function(m) local ok, err = mm.set_portal_recall(tonumber(m[2])); if not ok then mm.warn(err) else mm.note("Toggled recall flag for portal #" .. tostring(m[2])); mm.apply_bounce_settings_to_snd() end end},
+  {"^mapper chaosportal%s+(%d+)$", function(m) local ok, err = mm.set_portal_chaos(tonumber(m[2])); if not ok then mm.warn(err) else mm.note("Toggled chaos flag for portal #" .. tostring(m[2])) end end},
   {"^mapper bounceportal$", function() local selected = mm.portals and mm.portals.settings and mm.portals.settings.bounce_portal_id; if not selected then mm.note("bounceportal is not set.") else local cmd = portal_command_for_selected_id(selected); if cmd and tostring(cmd) ~= "" then mm.note("bounceportal: #" .. tostring(selected) .. " -> " .. tostring(cmd)) else mm.note("bounceportal portal_id: " .. tostring(selected)) end end end},
   {"^mapper bouncerecall$", function() local selected = mm.portals and mm.portals.settings and mm.portals.settings.bounce_recall_id; if not selected then mm.note("bouncerecall is not set.") else mm.note("bouncerecall portal_id: " .. tostring(selected)) end end},
   {"^mapper bounceportal clear$", function() local ok, err = mm.clear_bounce_portal(); if not ok then mm.warn(err) else mm.note("bounceportal cleared.") end end},

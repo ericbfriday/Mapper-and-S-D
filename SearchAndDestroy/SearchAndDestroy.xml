@@ -423,6 +423,19 @@
             </Trigger>
 
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
+                <name>gq_info_reward_train</name>
+                <script>snd.triggers.gqInfoRewardTrain(matches)</script>
+                <mCommand></mCommand>
+                <packageName></packageName>
+                <regexCodeList>
+                    <string>^Training Sessions\.{2}: \[\s*([0-9,]+)\s*\]$</string>
+                </regexCodeList>
+                <regexCodePropertyList>
+                    <integer>1</integer>
+                </regexCodePropertyList>
+            </Trigger>
+
+            <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>gq_info_reward_prac</name>
                 <script>snd.triggers.gqInfoRewardPrac(matches)</script>
                 <mCommand></mCommand>
@@ -521,6 +534,19 @@
             </Trigger>
 
             <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
+                <name>gq_reward_train_added</name>
+                <script>snd.triggers.gqCompletionRewardTrain(matches)</script>
+                <mCommand></mCommand>
+                <packageName></packageName>
+                <regexCodeList>
+                    <string>^Reward of ([0-9,]+) training sessions? added\.$</string>
+                </regexCodeList>
+                <regexCodePropertyList>
+                    <integer>1</integer>
+                </regexCodePropertyList>
+            </Trigger>
+
+            <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
                 <name>gq_reward_prac_added</name>
                 <script>snd.triggers.gqCompletionRewardPrac(matches)</script>
                 <mCommand></mCommand>
@@ -570,6 +596,19 @@
                 <packageName></packageName>
                 <regexCodeList>
                     <string>^Global Quest: Global quest # (\d+)(?: \(extended\))? is now over\.$</string>
+                </regexCodeList>
+                <regexCodePropertyList>
+                    <integer>1</integer>
+                </regexCodePropertyList>
+            </Trigger>
+            
+            <Trigger isActive="yes" isFolder="no" isTempTrigger="no" isMultiline="no" isPerlSlashGOption="no" isColorizerTrigger="no" isFilterTrigger="no" isSoundTrigger="no" isColorTrigger="no" isColorTriggerFg="no" isColorTriggerBg="no">
+                <name>gq_quit</name>
+                <script>snd.triggers.gqQuit(matches)</script>
+                <mCommand></mCommand>
+                <packageName></packageName>
+                <regexCodeList>
+                    <string>^You are no longer part of Global Quest # (\d+) and will be unable to rejoin\.$</string>
                 </regexCodeList>
                 <regexCodePropertyList>
                     <integer>1</integer>
